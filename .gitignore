@@ -1,0 +1,43 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Environnements virtuels ---
+.venv/
+venv/
+env/
+
+# --- Secrets / config locale ---
+.env
+
+# --- Données brutes (re-téléchargées par script, jamais versionnées) ---
+data/
+
+# --- MLflow / artefacts d'expériences ---
+mlruns/
+mlartifacts/
+mlflow.db
+
+# --- Caches outils ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- Couverture (pytest-cov) ---
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Streamlit (secrets locaux) ---
+.streamlit/secrets.toml
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

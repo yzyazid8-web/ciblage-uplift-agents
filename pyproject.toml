@@ -1,0 +1,26 @@
+[project]
+name = "ciblage-uplift-agents"
+version = "0.1.0"
+description = "Copilote de ciblage causal : uplift, optimisation sous contraintes et agents LLM"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# E501 : la longueur de ligne est gérée par le formateur (ruff format).
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+ignore_missing_imports = true   # stubs tiers (sklearn, xgboost, ortools…) absents/partiels
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]

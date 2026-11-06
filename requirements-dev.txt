@@ -1,0 +1,22 @@
+# Dépendances DEV (expériences, notebooks, tests, qualité). Installées en CI et en local,
+# PAS dans l'image de prod. Versions figées.
+
+-r requirements.txt
+
+# --- Suivi d'expériences ---
+mlflow==3.18.0
+
+# --- Référence pour VALIDER nos métriques d'uplift dans les tests (jamais utilisée dans src/) ---
+scikit-uplift==0.5.1
+
+# --- EDA / notebooks ---
+jupyterlab==4.6.6
+ipykernel==7.4.0
+matplotlib==3.11.2
+psutil==7.2.2
+
+# --- Qualité & tests ---
+ruff==0.17.4
+mypy==2.4.1
+pytest==9.2.0
+pytest-cov==7.1.0

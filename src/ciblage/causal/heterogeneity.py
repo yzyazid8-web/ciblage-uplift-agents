@@ -17,6 +17,7 @@ def uplift_by_segment(
     min_per_group: int = 30,
 ) -> pd.DataFrame:
     """Effet de chaque action dans chaque modalité de `segment`, avec IC de Welch et p de Holm."""
+    t = df[treatment_col].to_numpy()
     treatments = [g for g in np.unique(t) if g != control]
     rows = []
     for level, part in df.groupby(segment, observed=True, sort=True):

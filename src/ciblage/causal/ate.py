@@ -72,7 +72,7 @@ def bootstrap_ci(
     yc = np.asarray(y_control, dtype=np.float64)
     rng = np.random.default_rng(seed)
     diffs = np.empty(n_boot)
-    batch = max(1, 2_000_000 // max(len(yt), len(yc)))  # borne la mémoire 
+    batch = max(1, 2_000_000 // max(len(yt), len(yc)))  # borne la mémoire
     for start in range(0, n_boot, batch):
         b = min(batch, n_boot - start)
         mt = yt[rng.integers(0, len(yt), (b, len(yt)))].mean(axis=1)

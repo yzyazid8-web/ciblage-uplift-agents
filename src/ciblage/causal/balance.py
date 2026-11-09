@@ -14,7 +14,7 @@ SMD_THRESHOLD = 0.1
 
 
 def smd(x_treated: np.ndarray, x_control: np.ndarray) -> float:
-    
+
     xt = np.asarray(x_treated, dtype=np.float64)
     xc = np.asarray(x_control, dtype=np.float64)
     pooled = np.sqrt((xt.var(ddof=1) + xc.var(ddof=1)) / 2)

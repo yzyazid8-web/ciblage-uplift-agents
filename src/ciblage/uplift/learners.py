@@ -37,14 +37,17 @@ class BaseUplift:
         propensity: dict[int, float] | None = None,
         control: int = 0,
         seed: int = config.SEED,
+        effect_params: dict[str, Any] | None = None,
     ) -> None:
+        """`params` règle les modèles de réponse, `effect_params` ceux d'effet (X- et DR-learner)."""
         self.outcome = outcome
         self.params = {**DEFAULT_PARAMS, **(params or {})}
+        self.effect_params = {**self.params, **(effect_params or {})}
         self.propensity = propensity
         self.control = control
         self.seed = seed
 
-    # modèles de base 
+    # modèles de base
     def _response_model(self) -> XGBClassifier | XGBRegressor:
         """Modèle de E[Y | x] : classifieur (probabilité) si Y est binaire, régresseur sinon."""
         if self.outcome == "binary":
@@ -53,7 +56,7 @@ class BaseUplift:
 
     def _effect_model(self) -> XGBRegressor:
         """Modèle d'un effet (quantité continue, éventuellement négative)."""
-        return XGBRegressor(**self.params, random_state=self.seed)
+        return XGBRegressor(**self.effect_params, random_state=self.seed)
 
     @staticmethod
     def _predict_response(model: XGBClassifier | XGBRegressor, X: np.ndarray) -> np.ndarray:
@@ -61,7 +64,7 @@ class BaseUplift:
             return model.predict_proba(X)[:, 1]
         return model.predict(X)
 
-    # préparation 
+    # préparation
     def _prepare(self, X, treatment, y) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         Xa = np.asarray(X, dtype=np.float64)
         t = np.asarray(treatment)

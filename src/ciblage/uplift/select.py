@@ -29,7 +29,7 @@ from xgboost import XGBClassifier
 from ciblage import config
 from ciblage.data import criteo, hillstrom
 from ciblage.data import simulate as sim
-from ciblage.uplift import calibration, metrics, policy
+from ciblage.uplift import calibration, metrics, policy, tuning
 from ciblage.uplift.learners import DEFAULT_PARAMS, LEARNERS, BaseUplift
 
 OUTPUT = config.REPORTS_DIR / "phase2_uplift.md"
@@ -67,7 +67,6 @@ def cross_val_response(X, t, y, n_folds: int = 5, seed: int = config.SEED) -> np
 
 
 def ranking_metrics(y, t, uplift: np.ndarray) -> dict[int, dict[str, float]]:
-    """Qini, AUUC et uplift@30 % de chaque action contre le témoin."""
     out: dict[int, dict[str, float]] = {}
     fns: dict[str, Callable[..., float]] = {
         "qini": metrics.qini,
@@ -93,12 +92,16 @@ def _log_mlflow(run_name: str, params: dict[str, Any], values: dict[str, float])
         mlflow.log_metrics({k: float(v) for k, v in values.items() if np.isfinite(v)})
 
 
-# mise en forme 
+# mise en forme
 def _md(df: pd.DataFrame) -> str:
     cols = list(df.columns)
     lines = ["| " + " | ".join(map(str, cols)) + " |", "|" + "---|" * len(cols)]
     lines += ["| " + " | ".join(str(v) for v in row) + " |" for row in df.itertuples(index=False)]
     return "\n".join(lines)
+
+
+def _n(v: int) -> str:
+    return f"{v:,}".replace(",", "\u202f")  # espace fine insécable
 
 
 def _pts(v: float) -> str:
@@ -162,149 +165,215 @@ def bench_simulator(n: int = 40_000, seed: int = config.SEED) -> str:
         }
     )
     return (
-        f"## 1. Simulateur ({n:,} clients, uplift vrai connu)\n\n".replace(",", " ")
+        f"## 1. Simulateur ({_n(n)} clients, uplift vrai connu)\n\n"
         + "PEHE = erreur quadratique moyenne entre uplift prédit et uplift vrai (plus bas = mieux). "
         "Prédictions hors échantillon (validation croisée à 5 plis).\n\n" + _md(pd.DataFrame(rows))
     )
 
 
-# 2. Hillstrom 
-def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
-    h = hillstrom.load()
-    X = hillstrom.encode_features(h)
-    t = h["treatment"].to_numpy()
-    prop = {0: 1 / 3, 1: 1 / 3, 2: 1 / 3}  # protocole de l'essai
-    names = {1: "homme", 2: "femme"}
-    sections = []
+# 2. Hillstrom
+def fit_response(X, t, y, seed: int = config.SEED) -> XGBClassifier:
+    """Modèle du ciblage classique, P(réponse | x), appris sur les clients ayant reçu un e-mail."""
+    Xa, ta, ya = np.asarray(X, dtype=np.float64), np.asarray(t), np.asarray(y, dtype=np.float64)
+    clf = XGBClassifier(**DEFAULT_PARAMS, random_state=seed, eval_metric="logloss")
+    return clf.fit(Xa[ta != 0], ya[ta != 0] > 0)
 
-    # 2a. Visite : classement
-    y = h["visit"].to_numpy()
-    oofs: dict[str, np.ndarray] = {}
-    rows = []
-    for name, cls in LEARNERS.items():
-        oof = cross_val_uplift(partial(cls, propensity=prop), X, t, y, seed=seed)
-        oofs[name] = oof
-        rk = ranking_metrics(y, t, oof)
-        row: dict[str, str] = {"learner": name}
-        for a in (1, 2):
-            row[f"Qini {names[a]}"] = f"{rk[a]['qini']:.3f}"
-            row[f"AUUC {names[a]}"] = f"{rk[a]['auuc']:.3f}"
-            row[f"uplift@30% {names[a]} (pts)"] = _pts(rk[a]["uplift_at_30"])
-        rows.append(row)
-        _log_mlflow(
-            f"hillstrom-visit/{name}",
-            {"dataset": "hillstrom", "outcome": "visit", "learner": name},
-            {f"{m}_{a}": v for a, d in rk.items() for m, v in d.items()},
-        )
-    response = cross_val_response(X, t, y, seed=seed)
-    rk_resp = ranking_metrics(y, t, np.column_stack([response, response]))
-    row = {"learner": "*ciblage classique (P(visite))*"}
-    for a in (1, 2):
-        row[f"Qini {names[a]}"] = f"{rk_resp[a]['qini']:.3f}"
-        row[f"AUUC {names[a]}"] = f"{rk_resp[a]['auuc']:.3f}"
-        row[f"uplift@30% {names[a]} (pts)"] = _pts(rk_resp[a]["uplift_at_30"])
-    rows.append(row)
-    overall = {a: h.loc[t == a, "visit"].mean() - h.loc[t == 0, "visit"].mean() for a in (1, 2)}
-    sections.append(
-        "## 2. Hillstrom : visite (vraie campagne, 64 000 clients)\n\n"
-        "### Qualité du classement (hors échantillon)\n\n"
-        f"Repère : envoyer l'e-mail à TOUT le monde donne +{100 * overall[1]:.2f} pts (homme) et "
-        f"+{100 * overall[2]:.2f} pts (femme). Un bon modèle fait mieux sur ses 30 % préférés.\n\n"
-        + _md(pd.DataFrame(rows))
-    )
 
-    best = max(
-        oofs,
-        key=lambda k: np.mean(list(metrics.per_treatment(metrics.qini, y, oofs[k], t).values())),
-    )
+def _policy_table(cmp: dict[str, dict[str, float]], unit: str, baseline: str) -> str:
+    def fmt(v: float) -> str:
+        return _pts(v) if unit == "pts" else f"{v:+.3f}"
 
-    # 2b. Visite : valeur des politiques à budget égal
-    pols = {
-        "personne": np.zeros(len(h), dtype=np.int64),
-        "hasard 30 % (e-mail homme)": policy.top_score_policy(
-            np.random.default_rng(seed).random(len(h)), 1, BUDGET_FRAC
-        ),
-        "ciblage classique 30 % (e-mail homme)": policy.top_score_policy(response, 1, BUDGET_FRAC),
-        f"uplift 30 % ({best}, meilleur e-mail)": policy.best_action_policy(
-            oofs[best], [1, 2], BUDGET_FRAC
-        ),
-        "tout le monde (e-mail homme)": np.ones(len(h), dtype=np.int64),
-    }
-    cmp = policy.compare_policies(
-        y, t, pols, prop, baseline="ciblage classique 30 % (e-mail homme)", seed=seed
-    )
-    prow = [
+    def level(v: float) -> str:
+        return f"{100 * v:.2f} %" if unit == "pts" else f"{v:.3f} $"
+
+    rows = [
         {
             "politique": k,
-            "clients contactés": f"{100 * v['share_treated']:.0f} %",
-            "taux de visite": f"{100 * v['value']:.2f} % [{100 * v['value_low']:.2f} ; {100 * v['value_high']:.2f}]",
-            "gain vs ciblage classique (pts)": f"{_pts(v['gain'])} [{_pts(v['gain_low'])} ; {_pts(v['gain_high'])}]",
+            "contactés": f"{100 * v['share_treated']:.0f} %",
+            "résultat moyen par client": f"{level(v['value'])} [{level(v['value_low'])} ; {level(v['value_high'])}]",
+            f"gain vs {baseline} ({unit})": f"{fmt(v['gain'])} [{fmt(v['gain_low'])} ; {fmt(v['gain_high'])}]",
         }
         for k, v in cmp.items()
     ]
+    return _md(pd.DataFrame(rows))
+
+
+def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
+    h = hillstrom.load()
+    X = hillstrom.encode_features(h).to_numpy()
+    t = h["treatment"].to_numpy()
+    y = h["visit"].to_numpy()
+    prop = {0: 1 / 3, 1: 1 / 3, 2: 1 / 3}  # protocole de l'essai
+    names = {1: "homme", 2: "femme"}
+    tr, te = tuning.holdout_split(t, y, test_size=0.3, seed=seed)
+    sections = [
+        "## 2. Hillstrom : visite (vraie campagne, 64 000 clients)\n\n"
+        f"**Protocole** : {_n(len(te))} clients (30 %) mis de côté AVANT tout réglage ; réglage par "
+        f"validation croisée à 5 plis sur les {_n(len(tr))} autres, critère fixé à l'avance = Qini "
+        "moyen des deux e-mails ; le test ne sert qu'une fois, pour tous les chiffres ci-dessous."
+    ]
+
+    # 2a. Réglage (entraînement seulement)
+    results = {
+        name: tuning.tune(cls, X[tr], t[tr], y[tr], cross_val_uplift, propensity=prop, seed=seed)
+        for name, cls in LEARNERS.items()
+    }
+    trow = []
+    for name, r in results.items():
+        has_effect = name in ("X-learner", "DR-learner")
+        trow.append(
+            {
+                "learner": name,
+                "configurations testées": len(r.table),
+                "Qini CV défaut": f"{r.default_score:.4f}",
+                "Qini CV réglé": f"{r.best_score:.4f}",
+                "réponse retenue": r.best_params or "défaut",
+                "effet retenu": r.best_effect_params or ("défaut" if has_effect else "-"),
+                "durée (min)": f"{r.seconds / 60:.1f}",
+            }
+        )
+        _log_mlflow(
+            f"hillstrom-tuning/{name}",
+            {
+                "learner": name,
+                **{f"rep_{k}": v for k, v in r.best_params.items()},
+                **{f"eff_{k}": v for k, v in r.best_effect_params.items()},
+            },
+            {"qini_cv_default": r.default_score, "qini_cv_tuned": r.best_score},
+        )
+    best = max(results, key=lambda k: results[k].best_score)
+    sections.append("### Réglage (entraînement uniquement)\n\n" + _md(pd.DataFrame(trow)))
+
+    # 2b. Modèles finaux : entraînement complet -> prédiction sur le test
+    preds = {}
+    for name, cls in LEARNERS.items():
+        r = results[name]
+        model = cls(
+            params=r.best_params, effect_params=r.best_effect_params, propensity=prop, seed=seed
+        )
+        preds[name] = model.fit(X[tr], t[tr], y[tr]).predict(X[te])
+    response = fit_response(X[tr], t[tr], y[tr], seed).predict_proba(X[te])[:, 1]
+    yt, tt = y[te], t[te]
+    rows = []
+    candidates = [
+        *preds.items(),
+        ("*ciblage classique (P(visite))*", np.column_stack([response, response])),
+    ]
+    for name, u_ in candidates:
+        rk = ranking_metrics(yt, tt, u_)
+        row: dict[str, str] = {"learner": name}
+        for a in (1, 2):
+            row[f"Qini {names[a]}"] = f"{rk[a]['qini']:.3f}"
+            row[f"uplift@30% {names[a]} (pts)"] = _pts(rk[a]["uplift_at_30"])
+        rows.append(row)
+    overall = {a: yt[tt == a].mean() - yt[tt == 0].mean() for a in (1, 2)}
     sections.append(
-        f"### Valeur des politiques de ciblage (IPW, IC 95 % bootstrap apparié)\n\n"
-        f"Budget : {100 * BUDGET_FRAC:.0f} % des clients contactés. Le ciblage par uplift choisit "
-        "AUSSI le meilleur e-mail pour chaque client.\n\n" + _md(pd.DataFrame(prow))
+        "### Qualité du classement sur le TEST\n\n"
+        f"Repère sur le test : e-mail à tout le monde = {_pts(overall[1])} pts (homme), "
+        f"{_pts(overall[2])} pts (femme).\n\n" + _md(pd.DataFrame(rows))
     )
 
-    # 2c. Calibration du meilleur learner
-    cal_rows = []
-    for j, a in enumerate((1, 2)):
-        mask = (t == a) | (t == 0)
-        tab = calibration.calibration_table(
-            y[mask], oofs[best][mask, j], (t[mask] == a).astype(int), bins=5
-        )
-        for r in tab.itertuples():
-            cal_rows.append(
+    # 2c. Valeur des politiques sur le test, en séparant classement et choix de l'e-mail
+    u = preds[best]
+    rand = np.random.default_rng(seed).random(len(te))
+    base = "classique homme"
+    pols = {
+        "personne": np.zeros(len(te), dtype=np.int64),
+        "hasard 30 %, e-mail homme": policy.top_score_policy(rand, 1, BUDGET_FRAC),
+        base: policy.top_score_policy(response, 1, BUDGET_FRAC),
+        f"uplift ({best}) 30 %, e-mail homme": policy.top_score_policy(u[:, 0], 1, BUDGET_FRAC),
+        "classique 30 %, e-mail femme": policy.top_score_policy(response, 2, BUDGET_FRAC),
+        f"uplift ({best}) 30 %, e-mail femme": policy.top_score_policy(u[:, 1], 2, BUDGET_FRAC),
+        f"uplift ({best}) 30 %, meilleur e-mail par client": policy.best_action_policy(
+            u, [1, 2], BUDGET_FRAC
+        ),
+        "tout le monde, e-mail homme": np.ones(len(te), dtype=np.int64),
+    }
+    cmp = policy.compare_policies(yt, tt, pols, prop, baseline=base, seed=seed)
+    sections.append(
+        "### Valeur des politiques sur le TEST (IPW, IC 95 % bootstrap apparié)\n\n"
+        f"Budget : {100 * BUDGET_FRAC:.0f} % des clients. « classique homme » = les 30 % les plus "
+        "susceptibles de visiter reçoivent l'e-mail homme (pratique courante). Les lignes "
+        "« e-mail homme » et « e-mail femme » isolent l'effet du CLASSEMENT ; la ligne « meilleur "
+        "e-mail » ajoute le CHOIX de l'e-mail client par client.\n\n"
+        + _policy_table(cmp, "pts", base)
+    )
+
+    # 2c bis. Comparaison à e-mail egal : chaque e-mail contre le ciblage classique du même e-mail
+    fair_rows = []
+    for a in (1, 2):
+        ref = f"classique 30 %, e-mail {names[a]}"
+        duel = {ref: policy.top_score_policy(response, a, BUDGET_FRAC)}
+        for name, u_ in preds.items():
+            duel[f"uplift ({name}) 30 %, e-mail {names[a]}"] = policy.top_score_policy(
+                u_[:, a - 1], a, BUDGET_FRAC
+            )
+        res = policy.compare_policies(yt, tt, duel, prop, baseline=ref, seed=seed)
+        for k, v in res.items():
+            if k == ref:
+                continue
+            fair_rows.append(
                 {
                     "e-mail": names[a],
-                    "tranche (1 = plus fort uplift prédit)": r.tranche,
-                    "prédit (pts)": _pts(r.predit),
-                    "observé (pts)": f"{_pts(r.observe)} [{_pts(r.ci_low)} ; {_pts(r.ci_high)}]",
+                    "politique": k,
+                    "taux de visite": f"{100 * v['value']:.2f} %",
+                    "gain vs classique, même e-mail (pts)": f"{_pts(v['gain'])} [{_pts(v['gain_low'])} ; {_pts(v['gain_high'])}]",
                 }
             )
     sections.append(
-        f"### Calibration du {best} : l'uplift prédit correspond-il à l'uplift observé ?\n\n"
-        + _md(pd.DataFrame(cal_rows))
+        "### A e-mail égal : l'uplift vise-t-il mieux que le ciblage classique ? (TEST)\n\n"
+        "Chaque ligne compare un learner au ciblage classique qui envoie LE MÊME e-mail aux "
+        "30 % les plus susceptibles de visiter.\n\n" + _md(pd.DataFrame(fair_rows))
     )
 
-    # 2d. Dépense : valeur en dollars
+    # 2d. Calibration du meilleur learner sur le test
+    cal_rows = []
+    for j, a in enumerate((1, 2)):
+        mask = (tt == a) | (tt == 0)
+        tab = calibration.calibration_table(
+            yt[mask], u[mask, j], (tt[mask] == a).astype(int), bins=5
+        )
+        for c in tab.itertuples():
+            cal_rows.append(
+                {
+                    "e-mail": names[a],
+                    "tranche (1 = plus fort uplift prédit)": c.tranche,
+                    "prédit (pts)": _pts(c.predit),
+                    "observé (pts)": f"{_pts(c.observe)} [{_pts(c.ci_low)} ; {_pts(c.ci_high)}]",
+                }
+            )
+    sections.append(f"### Calibration du {best} sur le TEST\n\n" + _md(pd.DataFrame(cal_rows)))
+
+    # 2e. Dépense (dollars) : même learner et mêmes réglages, cible continue
     spend = h["spend"].to_numpy()
-    oof_spend = cross_val_uplift(
-        lambda: LEARNERS[best](outcome="continuous", propensity=prop), X, t, spend, seed=seed
+    rb = results[best]
+    model_s = LEARNERS[best](
+        outcome="continuous",
+        params=rb.best_params,
+        effect_params=rb.best_effect_params,
+        propensity=prop,
+        seed=seed,
     )
-    resp_spend = cross_val_response(X, t, spend, seed=seed)
+    u_s = model_s.fit(X[tr], t[tr], spend[tr]).predict(X[te])
+    resp_s = fit_response(X[tr], t[tr], spend[tr], seed).predict_proba(X[te])[:, 1]
     pols_s = {
         "personne": pols["personne"],
-        "ciblage classique 30 % (e-mail homme)": policy.top_score_policy(
-            resp_spend, 1, BUDGET_FRAC
+        base: policy.top_score_policy(resp_s, 1, BUDGET_FRAC),
+        f"uplift ({best}) 30 %, meilleur e-mail par client": policy.best_action_policy(
+            u_s, [1, 2], BUDGET_FRAC
         ),
-        f"uplift 30 % ({best}, meilleur e-mail)": policy.best_action_policy(
-            oof_spend, [1, 2], BUDGET_FRAC
-        ),
-        "tout le monde (e-mail homme)": pols["tout le monde (e-mail homme)"],
+        "tout le monde, e-mail homme": pols["tout le monde, e-mail homme"],
     }
-    cmp_s = policy.compare_policies(
-        spend, t, pols_s, prop, baseline="ciblage classique 30 % (e-mail homme)", seed=seed
-    )
-    srow = [
-        {
-            "politique": k,
-            "clients contactés": f"{100 * v['share_treated']:.0f} %",
-            "dépense moyenne par client ($)": f"{v['value']:.3f} [{v['value_low']:.3f} ; {v['value_high']:.3f}]",
-            "gain vs ciblage classique ($)": f"{v['gain']:+.3f} [{v['gain_low']:+.3f} ; {v['gain_high']:+.3f}]",
-        }
-        for k, v in cmp_s.items()
-    ]
+    cmp_s = policy.compare_policies(spend[te], tt, pols_s, prop, baseline=base, seed=seed)
     sections.append(
-        "## 3. Hillstrom : dépense (achats rares, environ 1 %, donc estimations bruitées)\n\n"
-        + _md(pd.DataFrame(srow))
+        "## 3. Hillstrom : dépense sur le TEST (achats rares, environ 1 % : estimations bruitées)\n\n"
+        "Réglages repris de la visite (pas de réglage spécifique : trop peu d'achats).\n\n"
+        + _policy_table(cmp_s, "$", base)
     )
     return "\n\n".join(sections), best
 
 
-# 3. Criteo 
+# 3. Criteo
 def bench_criteo(n: int = 400_000, seed: int = config.SEED) -> str:
     c = criteo.load_sample().sample(n=n, random_state=seed)
     X, t, y = c[criteo.FEATURES], c["treatment"].to_numpy(), c["visit"].to_numpy()
@@ -341,9 +410,7 @@ def bench_criteo(n: int = 400_000, seed: int = config.SEED) -> str:
     )
     overall = y[t == 1].mean() - y[t == 0].mean()
     return (
-        f"## 4. Criteo : visite ({n:,} lignes tirées de l'échantillon, 85 % traités)\n\n".replace(
-            ",", " "
-        )
+        f"## 4. Criteo : visite ({_n(n)} lignes tirées de l'échantillon, 85 % traités ; réglages par défaut)\n\n"
         + f"Repère : effet moyen de la publicité = {_pts(overall)} pts. Validation croisée à 3 plis.\n\n"
         + _md(pd.DataFrame(rows))
     )
@@ -355,12 +422,13 @@ def build() -> str:
     parts = [
         "# Phase 2 : moteur d'uplift",
         f"Généré le {date.today().isoformat()} par `python -m ciblage.uplift.select`. "
-        f"Modèle de base : XGBoost {DEFAULT_PARAMS['n_estimators']} arbres, profondeur "
-        f"{DEFAULT_PARAMS['max_depth']}. Toutes les prédictions sont hors échantillon.",
+        f"Modèle de base : XGBoost. Réglages par défaut ({DEFAULT_PARAMS['n_estimators']} arbres, "
+        f"profondeur {DEFAULT_PARAMS['max_depth']}) pour le simulateur et Criteo ; réglés par "
+        "validation croisée sur Hillstrom. Toutes les prédictions sont hors échantillon.",
         bench_simulator(),
         hill,
         bench_criteo(),
-        f"*Learner retenu sur Hillstrom (meilleur Qini moyen) : **{best}**. "
+        f"*Learner retenu sur Hillstrom (meilleur Qini en validation croisée sur l'entraînement) : **{best}**. "
         f"Durée totale : {(time.perf_counter() - start) / 60:.0f} min.*",
     ]
     return "\n\n".join(parts) + "\n"

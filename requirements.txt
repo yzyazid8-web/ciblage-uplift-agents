@@ -17,6 +17,7 @@ ortools==9.15.6755
 # --- Agents : orchestration LangGraph + accès aux LLM via LangChain ---
 pydantic==2.14.3
 langgraph==1.2.20
+langgraph-checkpoint-sqlite==3.1.3  # sauvegarde des sessions de conversation
 langchain-core==1.7.6
 langchain-groq==1.1.3
 langchain-ollama==1.1.0

@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
-# Nombres « français » 
+# Nombres « français »
 _NUMBER = re.compile(
     r"(?<![\w.,])[+-−]?\d{1,3}(?:[   ]\d{3})+(?:[,.]\d+)?|(?<![\w.,])[+-−]?\d+(?:[,.]\d+)?"
 )

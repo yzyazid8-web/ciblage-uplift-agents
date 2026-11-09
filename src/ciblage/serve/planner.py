@@ -147,6 +147,11 @@ class Planner:
             "cout_par_visite_en_plus": ev["spend"] / predicted_visits
             if predicted_visits > 0
             else float("nan"),
+            # prix marginal du budget : visites (ou € de profit) en plus par euro supplémentaire ;
+            # 0 si le budget n'est pas entièrement utile (tous les clients rentables sont déjà servis)
+            "prix_marginal_budget": float(res.budget_price)
+            if np.isfinite(res.budget_price)
+            else 0.0,
         }
         if sc.objective == "profit":
             summary["profit_predit"] = sc.value_per_visit * predicted_visits - ev["spend"]

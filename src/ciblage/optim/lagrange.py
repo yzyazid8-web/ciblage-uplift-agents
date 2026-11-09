@@ -115,5 +115,9 @@ def solve_lagrange(problem: Problem) -> HeuristicResult:
     order = np.lexsort((-problem.score[rows, cols], -reduced))
     a = fill(problem, rows[order], cols[order])
     return HeuristicResult(
-        a, evaluate(problem, a)["objective"], time.perf_counter() - start, bound=bound
+        a,
+        evaluate(problem, a)["objective"],
+        time.perf_counter() - start,
+        bound=bound,
+        budget_price=lam,  # dualité : gain de l'objectif pour un euro de budget supplémentaire
     )

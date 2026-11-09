@@ -16,6 +16,9 @@ class HeuristicResult:
     objective: float
     seconds: float
     bound: float = float("nan")  # borne supérieure prouvée (si la méthode en fournit une)
+    budget_price: float = float(
+        "nan"
+    )  # prix marginal du budget (lagrangien) : objectif gagné par euro en plus
 
     @property
     def gap(self) -> float:

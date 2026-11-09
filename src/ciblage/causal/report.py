@@ -63,7 +63,7 @@ def _balance_section(rep: balance.BalanceReport, names: dict[int, str], n_rows: 
     if rep.sample_ratio is None:
         ratio = "- Effectifs : protocole d'affectation non publié, test non applicable\n"
     else:
-        ratio = f"- Effectifs (test du chi² vs protocole) : p = {rep.sample_ratio['p_value']:.2f}\n"
+        ratio = f"- Effectifs (test du chi-2 vs protocole) : p = {rep.sample_ratio['p_value']:.2f}\n"
     sub = (
         f" (sur un sous-échantillon aléatoire de {_n(balance.TEST_MAX_N)} lignes)"
         if n_rows > balance.TEST_MAX_N
@@ -82,7 +82,7 @@ def build() -> str:
         f"Généré le {date.today().isoformat()} par `python -m ciblage.causal.report`.",
     ]
 
-    # --- Hillstrom ---
+    # Hillstrom
     h = hillstrom.load()
     names = hillstrom.TREATMENT_NAMES
     X = hillstrom.encode_features(h)
@@ -98,7 +98,7 @@ def build() -> str:
         _effects_section(eff, names, money={"spend"}),
     ]
 
-    # --- Criteo (échantillon) ---
+    # Criteo (échantillon)
     c = criteo.load_sample()
     share = float(c["treatment"].mean())
     rep_c = balance.check_balance(c[criteo.FEATURES], c["treatment"].to_numpy(), expected=None)

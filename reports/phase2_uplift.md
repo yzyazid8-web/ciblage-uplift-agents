@@ -8,10 +8,10 @@ PEHE = erreur quadratique moyenne entre uplift prédit et uplift vrai (plus bas 
 
 | learner | PEHE homme (pts) | PEHE femme (pts) | corr. homme | corr. femme | Qini homme | Qini femme | temps (s) |
 |---|---|---|---|---|---|---|---|
-| S-learner | 3.24 | 3.72 | 0.94 | 0.91 | 0.094 | 0.082 | 6 |
-| T-learner | 7.77 | 7.67 | 0.78 | 0.75 | 0.072 | 0.065 | 11 |
-| X-learner | 6.14 | 5.98 | 0.83 | 0.82 | 0.081 | 0.071 | 27 |
-| DR-learner | 8.31 | 8.18 | 0.74 | 0.72 | 0.071 | 0.063 | 61 |
+| S-learner | 3.24 | 3.72 | 0.94 | 0.91 | 0.094 | 0.082 | 7 |
+| T-learner | 7.77 | 7.67 | 0.78 | 0.75 | 0.072 | 0.065 | 13 |
+| X-learner | 6.14 | 5.98 | 0.83 | 0.82 | 0.081 | 0.071 | 30 |
+| DR-learner | 8.31 | 8.18 | 0.74 | 0.72 | 0.071 | 0.063 | 72 |
 | *référence : effet moyen pour tous* | 9.68 | 9.09 | - | - | - | - | - |
 | *référence : uplift VRAI (inatteignable)* | 0.00 | 0.00 | 1.00 | 1.00 | 0.100 | 0.087 | - |
 
@@ -23,10 +23,10 @@ PEHE = erreur quadratique moyenne entre uplift prédit et uplift vrai (plus bas 
 
 | learner | configurations testées | Qini CV défaut | Qini CV réglé | réponse retenue | effet retenu | durée (min) |
 |---|---|---|---|---|---|---|
-| S-learner | 13 | 0.0361 | 0.0388 | {'max_depth': 2, 'n_estimators': 300, 'min_child_weight': 5} | - | 0.9 |
-| T-learner | 13 | 0.0246 | 0.0332 | {'max_depth': 2, 'n_estimators': 100, 'min_child_weight': 100} | - | 1.9 |
-| X-learner | 25 | 0.0216 | 0.0342 | {'max_depth': 2, 'n_estimators': 100, 'min_child_weight': 5} | {'max_depth': 2, 'n_estimators': 50, 'min_child_weight': 50} | 6.3 |
-| DR-learner | 25 | 0.0218 | 0.0330 | {'max_depth': 2, 'n_estimators': 100, 'min_child_weight': 100} | {'max_depth': 2, 'n_estimators': 50, 'min_child_weight': 300} | 16.9 |
+| S-learner | 13 | 0.0361 | 0.0388 | {'max_depth': 2, 'n_estimators': 300, 'min_child_weight': 5} | - | 1.0 |
+| T-learner | 13 | 0.0246 | 0.0332 | {'max_depth': 2, 'n_estimators': 100, 'min_child_weight': 100} | - | 1.6 |
+| X-learner | 25 | 0.0216 | 0.0342 | {'max_depth': 2, 'n_estimators': 100, 'min_child_weight': 5} | {'max_depth': 2, 'n_estimators': 50, 'min_child_weight': 50} | 7.2 |
+| DR-learner | 25 | 0.0218 | 0.0330 | {'max_depth': 2, 'n_estimators': 100, 'min_child_weight': 100} | {'max_depth': 2, 'n_estimators': 50, 'min_child_weight': 300} | 19.3 |
 
 ### Qualité du classement sur le TEST
 
@@ -54,6 +54,21 @@ Budget : 30 % des clients. « classique homme » = les 30 % les plus susceptible
 | uplift (S-learner) 30 %, e-mail femme | 30 % | 13.16 % [12.41 % ; 14.00 %] | +0.17 [-0.74 ; +1.04] |
 | uplift (S-learner) 30 %, meilleur e-mail par client | 30 % | 12.83 % [11.99 % ; 13.64 %] | -0.16 [-0.82 ; +0.46] |
 | tout le monde, e-mail homme | 100 % | 18.27 % [17.32 % ; 19.19 %] | +5.28 [+4.32 ; +6.17] |
+
+### À e-mail égal : l'uplift vise-t-il mieux que le ciblage classique ? (TEST)
+
+Chaque ligne compare un learner au ciblage classique qui envoie LE MÊME e-mail aux 30 % les plus susceptibles de visiter.
+
+| e-mail | politique | taux de visite | gain vs classique, même e-mail (pts) |
+|---|---|---|---|
+| homme | uplift (S-learner) 30 %, e-mail homme | 12.84 % | -0.15 [-0.79 ; +0.47] |
+| homme | uplift (T-learner) 30 %, e-mail homme | 13.21 % | +0.22 [-0.40 ; +0.85] |
+| homme | uplift (X-learner) 30 %, e-mail homme | 13.01 % | +0.02 [-0.60 ; +0.63] |
+| homme | uplift (DR-learner) 30 %, e-mail homme | 13.22 % | +0.23 [-0.34 ; +0.80] |
+| femme | uplift (S-learner) 30 %, e-mail femme | 13.16 % | +1.03 [+0.43 ; +1.59] |
+| femme | uplift (T-learner) 30 %, e-mail femme | 13.30 % | +1.18 [+0.45 ; +1.91] |
+| femme | uplift (X-learner) 30 %, e-mail femme | 12.96 % | +0.83 [-0.01 ; +1.70] |
+| femme | uplift (DR-learner) 30 %, e-mail femme | 12.94 % | +0.81 [-0.06 ; +1.66] |
 
 ### Calibration du S-learner sur le TEST
 
@@ -87,10 +102,10 @@ Repère : effet moyen de la publicité = +1.06 pts. Validation croisée à 3 pli
 
 | learner | Qini | AUUC | uplift@30% (pts) | temps (s) |
 |---|---|---|---|---|
-| S-learner | 0.088 | 0.035 | +3.06 | 22 |
-| T-learner | 0.073 | 0.029 | +2.80 | 27 |
-| X-learner | 0.078 | 0.031 | +2.92 | 55 |
-| DR-learner | 0.077 | 0.030 | +2.81 | 86 |
+| S-learner | 0.088 | 0.035 | +3.06 | 23 |
+| T-learner | 0.073 | 0.029 | +2.80 | 26 |
+| X-learner | 0.078 | 0.031 | +2.92 | 41 |
+| DR-learner | 0.077 | 0.030 | +2.81 | 111 |
 | *ciblage classique (P(visite))* | 0.086 | 0.034 | +2.99 | - |
 
-*Learner retenu sur Hillstrom (meilleur Qini en validation croisée sur l'entraînement) : **S-learner**. Durée totale : 32 min.*
+*Learner retenu sur Hillstrom (meilleur Qini en validation croisée sur l'entraînement) : **S-learner**. Durée totale : 35 min.*

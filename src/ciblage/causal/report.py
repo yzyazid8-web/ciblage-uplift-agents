@@ -63,7 +63,9 @@ def _balance_section(rep: balance.BalanceReport, names: dict[int, str], n_rows: 
     if rep.sample_ratio is None:
         ratio = "- Effectifs : protocole d'affectation non publié, test non applicable\n"
     else:
-        ratio = f"- Effectifs (test du chi-2 vs protocole) : p = {rep.sample_ratio['p_value']:.2f}\n"
+        ratio = (
+            f"- Effectifs (test du chi-2 vs protocole) : p = {rep.sample_ratio['p_value']:.2f}\n"
+        )
     sub = (
         f" (sur un sous-échantillon aléatoire de {_n(balance.TEST_MAX_N)} lignes)"
         if n_rows > balance.TEST_MAX_N

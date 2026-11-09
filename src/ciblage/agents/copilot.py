@@ -14,6 +14,7 @@ from langgraph.types import Command
 from ciblage import config
 from ciblage.agents.graph import Deps, build_graph
 from ciblage.agents.llm import make_understander, make_writer
+from ciblage.agents.tracing import enable_tracing
 from ciblage.serve.planner import Planner
 
 SESSIONS_DB = config.DATA_DIR / "sessions.db"
@@ -42,6 +43,7 @@ class Copilot:
     def from_env(
         cls, planner: Planner | None = None, db_path: Path | None = SESSIONS_DB
     ) -> Copilot:
+        enable_tracing()  # actif seulement si CIBLAGE_TRACING=1
         deps = Deps(
             planner=planner or Planner(), understand=make_understander(), write=make_writer()
         )

@@ -56,6 +56,9 @@ class Understanding(BaseModel):
         None, description="Segment de clients visé par une question"
     )
     client_id: int | None = Field(None, description="Numéro de client mentionné")
+    about_excluded: bool = Field(
+        False, description="La question porte sur les clients écartés (non contactés) par le plan"
+    )
     advice_topic: Literal["budget", "cout_homme", "cout_femme"] | None = Field(
         None, description="Sujet d'une demande de conseil : le budget, ou le coût d'un des e-mails"
     )
@@ -79,7 +82,10 @@ class AgentState(TypedDict, total=False):
     clarify_count: int  # nombre de questions posées pendant ce tour (limite anti-boucle)
     turn_intent: str  # intention traitée pendant ce tour (après clarification éventuelle)
     previous_result: dict[str, Any] | None  # plan précédent (pour comparer un « et si »)
-    advice_request: dict[str, Any] | None  # demande de conseil en attente (sujet, variation)
+    request: (
+        dict[str, Any] | None
+    )  # compréhension du PREMIER message du tour (gardée pendant la clarification)
+    turn_question: str  # message d'origine du tour (transmis au rédacteur)
     facts: (
         dict[str, Any] | None
     )  # dossier de faits du tour (seule source de chiffres de la réponse)

@@ -22,6 +22,13 @@ U = {
     "météo": Understanding(intent="hors_sujet"),
     "compare": Understanding(intent="comparer"),
     "pourquoi": Understanding(intent="expliquer"),
+    "pourquoi client 5": Understanding(intent="expliquer", client_id=5),
+    "pourquoi client inconnu": Understanding(intent="expliquer", client_id=999_999),
+    "pourquoi homme seulement": Understanding(intent="expliquer", segment="homme seulement"),
+    "qui est écarté": Understanding(intent="expliquer", about_excluded=True),
+    "portefeuille": Understanding(intent="donnees"),
+    "portefeuille deux rayons": Understanding(intent="donnees", segment="homme et femme"),
+    "exporte": Understanding(intent="exporter"),
     "conseil +100": Understanding(intent="conseil", advice_topic="budget", budget_delta=100),
     "conseil courbe": Understanding(intent="conseil", advice_topic="budget"),
     "conseil femme": Understanding(intent="conseil", advice_topic="cout_femme"),
@@ -36,7 +43,7 @@ def fake_understand(messages):
 
 
 def faithful_writer(messages):
-    facts = json.loads(messages[1][1].split("\n", 1)[1])
+    facts = json.loads(messages[-1][1].split("\n", 1)[1])
     if "plan" not in facts:  # conseil, comparaison : réponse sans chiffre (toujours fidèle)
         return "Analyse effectuée."
     p = facts["plan"]
@@ -52,8 +59,11 @@ def planner():
     return Planner()
 
 
-def copilot(planner, writer=faithful_writer, db_path=None):
-    return Copilot(Deps(planner=planner, understand=fake_understand, write=writer), db_path)
+def copilot(planner, writer=faithful_writer, db_path=None, exports_dir=None):
+    deps = Deps(planner=planner, understand=fake_understand, write=writer)
+    if exports_dir is not None:
+        deps.exports_dir = exports_dir
+    return Copilot(deps, db_path)
 
 
 def test_complete_request_gives_verified_answer(planner):
@@ -101,11 +111,6 @@ def test_what_if_without_reference_budget_asks(planner):
 def test_off_topic_is_refused_with_a_single_llm_call(planner):
     r = copilot(planner).send("t6", "météo")
     assert r.text == REFUSAL and r.llm_calls == 1
-
-
-def test_not_yet_supported_intent_is_explained(planner):
-    r = copilot(planner).send("t7", "pourquoi")
-    assert "bientôt" in r.text
 
 
 def test_compare_needs_two_scenarios(planner):
@@ -214,3 +219,95 @@ def test_fallback_templates_cover_every_answer_type(planner):
     for kind, facts in cases.items():
         text = fallback(kind, facts)
         assert faithfulness.check(text, facts).ok, (kind, text)
+
+
+def test_explain_a_client_uses_the_profitability_threshold(planner):
+    c = copilot(planner)
+    c.send("t20", "plan complet")
+    r = c.send("t20", "pourquoi client 5")
+    assert r.kind == "reponse"
+    facts = c.state("t20")["facts"]
+    assert facts["client"] == 5 and "seuil_de_rentabilite_visites_par_euro" in facts
+    assert c.state("t20")["facts_kind"] == "explication_client"
+
+
+def test_explain_invalid_client_is_answered_clearly(planner):
+    c = copilot(planner)
+    c.send("t21", "plan complet")
+    r = c.send("t21", "pourquoi client inconnu")
+    assert "numéro de client" in r.text and r.llm_calls == 1
+
+
+def test_explain_segment_excluded_and_all_segments(planner):
+    c = copilot(planner)
+    c.send("t22", "plan complet")
+    c.send("t22", "pourquoi homme seulement")
+    assert c.state("t22")["facts"]["segment"] == "homme seulement"
+    c.send("t22", "qui est écarté")
+    assert c.state("t22")["facts_kind"] == "explication_ecartes"
+    c.send("t22", "pourquoi")
+    assert len(c.state("t22")["facts"]["segments"]) == 3
+
+
+def test_data_questions_need_no_scenario(planner):
+    c = copilot(planner)
+    r = c.send("t23", "portefeuille")
+    assert (
+        r.kind == "reponse" and c.state("t23")["facts"]["clients_du_perimetre"] == planner.n_clients
+    )
+    c.send("t23", "portefeuille deux rayons")
+    assert c.state("t23")["facts"]["perimetre"] == "homme et femme"
+
+
+def test_export_requires_explicit_confirmation(planner, tmp_path):
+    c = copilot(planner, exports_dir=tmp_path)
+    c.send("t24", "plan complet")
+    r = c.send("t24", "exporte")
+    assert r.kind == "question" and "Confirmes-tu" in r.text
+    assert not list(tmp_path.iterdir())  # rien n'est écrit avant la confirmation
+    r = c.send("t24", "non merci")
+    assert "annulé" in r.text and not list(tmp_path.iterdir())
+    c.send("t24", "exporte")
+    r = c.send("t24", "oui")
+    assert "Fichier de campagne écrit" in r.text
+    assert len(list(tmp_path.glob("campagne_*.csv"))) == 1
+
+
+def test_too_long_message_is_rejected_without_calling_the_llm(planner):
+    r = copilot(planner).send("t25", "x" * 5_000)
+    assert "raccourcir" in r.text and r.llm_calls == 0
+
+
+def test_generic_fallback_is_faithful(planner):
+    from ciblage.agents import faithfulness
+    from ciblage.agents.graph import fallback
+    from ciblage.serve import explainer
+    from ciblage.serve.planner import Scenario
+
+    sc = Scenario(budget=500.0)
+    for kind, facts in {
+        "explication_client": explainer.client_explanation(planner, sc, 3),
+        "explication_ecartes": explainer.excluded_profile(planner, sc),
+        "donnees": explainer.portfolio_overview(planner),
+    }.items():
+        text = fallback(kind, facts)
+        assert faithfulness.check(text, facts).ok, (kind, text)
+
+
+def test_off_topic_with_campaign_parameters_is_corrected(planner):
+    """Vu en test réel : le LLM classe parfois « hors sujet » un message qui donne budget et coûts."""
+    U["incohérent"] = Understanding(
+        intent="hors_sujet", budget=400, cost_homme=0.12, cost_femme=0.10
+    )
+    r = copilot(planner).send("t26", "incohérent")
+    assert r.kind == "reponse" and r.scenario["budget"] == 400
+    assert any("corrigé" in step for step in r.trace)
+
+
+def test_question_about_excluded_clients_is_routed_to_the_plan(planner):
+    """Vu en test réel : « Qui sont les clients écartés ? » était compris comme une question de données."""
+    U["Qui sont les clients écartés ?"] = Understanding(intent="donnees")
+    c = copilot(planner)
+    c.send("t27", "plan complet")
+    c.send("t27", "Qui sont les clients écartés ?")
+    assert c.state("t27")["facts_kind"] == "explication_ecartes"

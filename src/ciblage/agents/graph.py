@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -13,7 +15,7 @@ from ciblage.agents import faithfulness, prompts
 from ciblage.agents.llm import Understander, Writer, understand_messages
 from ciblage.agents.schema import AgentState, Understanding
 from ciblage.agents.verify import verify_plan
-from ciblage.serve import advisor
+from ciblage.serve import advisor, explainer, export
 from ciblage.serve.planner import Planner, Scenario
 
 REQUIRED = {
@@ -22,6 +24,15 @@ REQUIRED = {
     "cost_femme": "le coût d'un e-mail femme (en €)",
 }
 MAX_CLARIFY = 3
+MAX_MESSAGE_CHARS = 2_000  # protège le quota : un message plus long n'est pas envoyé au LLM
+EXCLUDED_WORDS = re.compile(
+    r"(écart|exclu|non[- ]contact|pas contact|laiss\w* de côté)", re.IGNORECASE
+)
+MARKDOWN = re.compile(r"\*\*|__")  # gras markdown, retiré malgré la consigne si le LLM en met
+NEXT_STEP = {"conseil": "advise", "expliquer": "explain_decision", "exporter": "confirm_export"}
+YES = re.compile(
+    r"^\s*(oui|o|ok|yes|y|vas-y|go|confirme|je confirme|d'accord|c'est bon)\b", re.IGNORECASE
+)
 SCENARIO_FIELDS = {f for f in Scenario.__dataclass_fields__}
 
 REFUSAL = (
@@ -35,6 +46,7 @@ class Deps:
     planner: Planner
     understand: Understander
     write: Writer
+    exports_dir: Path = export.EXPORTS_DIR
 
 
 # outils de mise en forme
@@ -198,8 +210,48 @@ def template_advice(kind: str, facts: dict[str, Any]) -> str:
     raise ValueError(f"Type de réponse inconnu : {kind}")
 
 
+def _flat(facts: Any, prefix: str = "") -> list[str]:
+    """Faits aplatis en « libellé : valeur » lisibles (pour le texte de repli générique)."""
+    if isinstance(facts, dict):
+        out: list[str] = []
+        for k, v in facts.items():
+            out += _flat(
+                v, f"{prefix}{k.replace('_', ' ')} › " if isinstance(v, dict | list) else ""
+            )
+            if not isinstance(v, dict | list) and v is not None:
+                value = _fr(v, 3).rstrip("0").rstrip(",") if isinstance(v, float) else str(v)
+                out.append(f"{prefix}{k.replace('_', ' ')} : {value}")
+        return out
+    if isinstance(facts, list):
+        return [line for item in facts for line in _flat(item, prefix)]
+    return []
+
+
+def generic_template(facts: dict[str, Any]) -> str:
+    """Repli sur pour les explications et les données : les faits calculés, tels quels."""
+    return "Voici les éléments calculés : " + " ; ".join(_flat(facts)) + "."
+
+
 def fallback(kind: str, facts: dict[str, Any]) -> str:
-    return template_answer(facts) if kind == "plan" else template_advice(kind, facts)
+    if kind == "plan":
+        return template_answer(facts)
+    if kind.startswith(("conseil", "comparaison")):
+        return template_advice(kind, facts)
+    return generic_template(facts)
+
+
+def _has_campaign_params(understanding: dict[str, Any]) -> bool:
+    """Le message contient-il au moins un paramètre de campagne (budget, coût, limite...) ?"""
+    keys = (
+        "budget",
+        "budget_factor",
+        "budget_delta",
+        "cost_homme",
+        "cost_femme",
+        "max_homme",
+        "max_femme",
+    )
+    return any(understanding.get(k) is not None for k in keys)
 
 
 def _scenario(draft: dict[str, Any] | None) -> Scenario:
@@ -209,14 +261,16 @@ def _scenario(draft: dict[str, Any] | None) -> Scenario:
 # construction du graphe
 def build_graph(deps: Deps, checkpointer: Any = None):
     def start(state: AgentState) -> dict[str, Any]:
+        too_long = len(state.get("user_input", "")) > MAX_MESSAGE_CHARS
         return {
             "trace": ["début"],
             "llm_calls": 0,
             "answer": "",
             "clarify_count": 0,
-            "route": "",
+            "route": "too_long" if too_long else "understand",
             "facts": None,
             "facts_kind": "",
+            "turn_question": state.get("user_input", ""),
         }
 
     def understand(state: AgentState) -> dict[str, Any]:
@@ -230,29 +284,50 @@ def build_graph(deps: Deps, checkpointer: Any = None):
 
     def supervisor(state: AgentState) -> dict[str, Any]:
         intent = state.get("pending_intent") or state["understanding"]["intent"]
+        trace = list(state["trace"])
+        understanding = dict(state["understanding"])
+        if intent == "hors_sujet" and _has_campaign_params(understanding):
+            # incohérence du LLM (observée en test réel) : des paramètres de campagne ont été
+            # extraits, le message n'est donc pas hors sujet -> règle déterministe
+            intent = "modifier" if state.get("scenario") else "plan"
+            trace.append(
+                f"superviseur : « hors sujet » corrigé en « {intent} » (paramètres présents)"
+            )
+        if intent == "donnees" and EXCLUDED_WORDS.search(state.get("turn_question", "")):
+            # « qui sont les clients écartés ? » porte sur le PLAN, pas sur le portefeuille
+            intent = "expliquer"
+            understanding["about_excluded"] = True
+            trace.append("superviseur : question sur les clients écartés -> explication du plan")
+        understanding["intent"] = intent  # les étapes suivantes lisent l'intention corrigée
         routes = {
             "plan": "assemble",
             "modifier": "assemble",
             "conseil": "assemble",
+            "expliquer": "assemble",
+            "exporter": "assemble",
             "comparer": "compare",
+            "donnees": "data",
             "hors_sujet": "refuse",
         }
         route = routes.get(intent, "not_yet")
         return {
+            "understanding": understanding,
             "turn_intent": intent,
             "route": route,
-            "trace": state["trace"] + [f"superviseur -> {route}"],
+            "trace": trace + [f"superviseur -> {route}"],
         }
 
     def assemble(state: AgentState) -> dict[str, Any]:
         u = Understanding.model_validate(state["understanding"])
         intent = state.get("pending_intent") or u.intent
         update: dict[str, Any] = {}
-        if intent == "conseil" and not state.get("pending_intent"):
-            # la variation demandée est la question posée, pas une modification du scénario
-            update["advice_request"] = {"topic": u.advice_topic, "delta": u.budget_delta}
+        if not state.get("pending_intent"):
+            # demande d'origine (sujet du conseil, client, segment...), gardée pendant la clarification
+            update["request"] = u.model_dump()
         base = state.get("draft") if state.get("pending_intent") else state.get("scenario")
-        draft, issues = merge(base, u, apply_relative=intent != "conseil")
+        # seules les demandes de plan modifient le budget relativement ; pour un conseil,
+        # « 100 € de plus » est la question posée, pas une modification du scénario
+        draft, issues = merge(base, u, apply_relative=intent in ("plan", "modifier"))
         missing = [label for key, label in REQUIRED.items() if draft.get(key) is None]
         if draft.get("objective") == "profit" and draft.get("value_per_visit") is None:
             missing.append("ce que rapporte une visite (en €), pour l'objectif profit")
@@ -273,7 +348,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         return {
             **update,
             "draft": draft,
-            "route": "advise" if intent == "conseil" else "compute",
+            "route": NEXT_STEP.get(intent, "compute"),
             "trace": state["trace"] + ["assemblage : scénario complet"],
         }
 
@@ -337,8 +412,8 @@ def build_graph(deps: Deps, checkpointer: Any = None):
 
     def advise(state: AgentState) -> dict[str, Any]:
         sc = _scenario(state["draft"])
-        request = state.get("advice_request") or {}
-        topic, delta = request.get("topic"), request.get("delta")
+        request = state.get("request") or {}
+        topic, delta = request.get("advice_topic"), request.get("budget_delta")
         if topic in ("cout_homme", "cout_femme"):
             email: Literal["homme", "femme"] = "homme" if topic == "cout_homme" else "femme"
             facts, kind = advisor.cost_threshold(deps.planner, sc, email), "conseil_cout"
@@ -354,7 +429,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "draft": None,
             "pending_intent": None,
             "question": None,
-            "advice_request": None,
+            "request": None,
             "facts": facts,
             "facts_kind": kind,
             "route": "write",
@@ -382,6 +457,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         facts, kind = state.get("facts") or {}, state["facts_kind"]
         msgs = [
             ("system", prompts.PROMPTS[kind]),
+            ("user", f"QUESTION : {state.get('turn_question', '')}"),
             ("user", "DOSSIER DE FAITS :\n" + json.dumps(facts, ensure_ascii=False)),
         ]
         calls, trace = state.get("llm_calls", 0), list(state["trace"])
@@ -391,13 +467,96 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             report = faithfulness.check(text, facts)
             if report.ok:
                 trace.append(f"rédaction : chiffres vérifiés (essai {attempt + 1})")
-                return {"answer": text, "llm_calls": calls, "trace": trace}
+                return {"answer": MARKDOWN.sub("", text), "llm_calls": calls, "trace": trace}
             trace.append(f"rédaction : chiffres non vérifiés {report.unsupported}")
             msgs = msgs + [
                 ("user", prompts.REGENERATE.format(numbers=", ".join(report.unsupported)))
             ]
         trace.append("rédaction : texte standard (repli sûr)")
         return {"answer": fallback(kind, facts), "llm_calls": calls, "trace": trace}
+
+    def explain_decision(state: AgentState) -> dict[str, Any]:
+        sc = _scenario(state["draft"])
+        req = state.get("request") or {}
+        try:
+            if req.get("client_id") is not None:
+                facts = explainer.client_explanation(deps.planner, sc, int(req["client_id"]))
+                kind = "explication_client"
+            elif req.get("segment"):
+                facts = explainer.segment_explanation(deps.planner, sc, req["segment"])
+                kind = "explication_segment"
+            elif req.get("about_excluded"):
+                facts = explainer.excluded_profile(deps.planner, sc)
+                kind = "explication_ecartes"
+            else:
+                facts = {
+                    "segments": [
+                        explainer.segment_explanation(deps.planner, sc, seg)
+                        for seg in explainer.SEGMENTS
+                    ]
+                }
+                kind = "explication_segments"
+        except ValueError as err:  # numéro de client hors portefeuille, segment inconnu
+            return {
+                "answer": f"{err}.",
+                "route": "end",
+                "trace": state["trace"] + ["explication : demande invalide"],
+            }
+        return {
+            "scenario": asdict(sc),
+            "draft": None,
+            "pending_intent": None,
+            "question": None,
+            "request": None,
+            "facts": facts,
+            "facts_kind": kind,
+            "route": "write",
+            "trace": state["trace"] + [f"explication : {kind}"],
+        }
+
+    def data(state: AgentState) -> dict[str, Any]:
+        segment = (state.get("understanding") or {}).get("segment")
+        return {
+            "facts": explainer.portfolio_overview(deps.planner, segment),
+            "facts_kind": "donnees",
+            "trace": state["trace"] + ["données : portrait du portefeuille"],
+        }
+
+    def confirm_export(state: AgentState) -> dict[str, Any]:
+        """Seule action à effet réel : on montre ce qui sera écrit et on attend un oui explicite."""
+        sc = _scenario(state["draft"])
+        p = export.preview(deps.planner, sc)
+        question = (
+            f"Je vais créer le fichier de campagne : {_fr(p['lignes'], 0)} clients "
+            f"({_fr(p['email_homme'], 0)} e-mails homme, {_fr(p['email_femme'], 0)} e-mails femme), "
+            f"pour une dépense de {_fr(p['depense_eur'])} €. Confirmes-tu l'export ? (oui / non)"
+        )
+        reply = str(interrupt({"question": question}))
+        base = {
+            "scenario": asdict(sc),
+            "draft": None,
+            "pending_intent": None,
+            "question": None,
+            "request": None,
+        }
+        if not YES.match(reply):
+            return {
+                **base,
+                "answer": "Export annulé : aucun fichier n'a été écrit.",
+                "trace": state["trace"] + ["export : refusé par l'utilisateur"],
+            }
+        res = export.export_campaign(deps.planner, sc, directory=deps.exports_dir)
+        return {
+            **base,
+            "answer": f"Fichier de campagne écrit : {res['fichier']} ({_fr(res['lignes'], 0)} lignes).",
+            "trace": state["trace"] + ["export : confirmé et écrit"],
+        }
+
+    def too_long(state: AgentState) -> dict[str, Any]:
+        return {
+            "answer": f"Ton message dépasse {MAX_MESSAGE_CHARS} caractères : peux-tu le raccourcir ?",
+            "trace": state["trace"] + ["garde-fou : message trop long (aucun appel au LLM)"],
+        }
 
     def refuse(state: AgentState) -> dict[str, Any]:
         return {"answer": REFUSAL, "trace": state["trace"] + ["refus (hors sujet)"]}
@@ -421,6 +580,10 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         "compute": compute,
         "advise": advise,
         "compare": compare,
+        "explain_decision": explain_decision,
+        "data": data,
+        "confirm_export": confirm_export,
+        "too_long": too_long,
         "write": write,
         "refuse": refuse,
         "not_yet": not_yet,
@@ -428,18 +591,26 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     for name, fn in nodes.items():
         g.add_node(name, fn)
     g.add_edge(START, "start")
-    g.add_edge("start", "understand")
+    g.add_conditional_edges("start", lambda s: s["route"], ["understand", "too_long"])
     g.add_edge("understand", "supervisor")
     g.add_conditional_edges(
-        "supervisor", lambda s: s["route"], ["assemble", "compare", "refuse", "not_yet"]
+        "supervisor", lambda s: s["route"], ["assemble", "compare", "data", "refuse", "not_yet"]
     )
-    g.add_conditional_edges("assemble", lambda s: s["route"], ["clarify", "compute", "advise"])
+    g.add_conditional_edges(
+        "assemble",
+        lambda s: s["route"],
+        ["clarify", "compute", "advise", "explain_decision", "confirm_export"],
+    )
+    g.add_conditional_edges(
+        "explain_decision", lambda s: s["route"], {"write": "write", "end": END}
+    )
+    g.add_edge("data", "write")
     g.add_conditional_edges(
         "clarify", lambda s: s["route"], {"understand": "understand", "end": END}
     )
     g.add_conditional_edges("compute", lambda s: s["route"], {"write": "write", "end": END})
     g.add_conditional_edges("compare", lambda s: s["route"], {"write": "write", "end": END})
     g.add_edge("advise", "write")
-    for name in ("write", "refuse", "not_yet"):
+    for name in ("write", "refuse", "not_yet", "confirm_export", "too_long"):
         g.add_edge(name, END)
     return g.compile(checkpointer=checkpointer)

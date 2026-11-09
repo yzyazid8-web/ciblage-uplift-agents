@@ -33,6 +33,8 @@ def fill(problem: Problem, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
     capacity = problem.capacity.astype(np.float64).copy()
     cost = problem.cost
     cheapest = float(cost.min()) if len(cost) else 0.0
+    if budget < cheapest:  # rien n'est abordable : inutile de parcourir les candidats
+        return a
     for i, j in zip(rows.tolist(), cols.tolist(), strict=True):
         if a[i] or capacity[j] < 1 or cost[j] > budget:
             continue

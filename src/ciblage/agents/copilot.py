@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -58,15 +59,52 @@ class Copilot:
         snap = self.graph.get_state(self._config(thread_id))
         return any(task.interrupts for task in snap.tasks)
 
+    def sync_scenario(self, thread_id: str, scenario: dict[str, Any]) -> bool:
+        """Aligne le scénario de l'agent sur celui affiché ailleurs (formulaire du tableau de bord)."""
+        if self.waiting_for_answer(thread_id) or self.state(thread_id).get("scenario") == scenario:
+            return False
+        # écrit « comme si » l'étape finale venait de s'exécuter : aucune étape n'est en attente
+        self.graph.update_state(self._config(thread_id), {"scenario": scenario}, as_node="write")
+        return True
+
     def state(self, thread_id: str) -> dict[str, Any]:
         return dict(self.graph.get_state(self._config(thread_id)).values)
 
+    def _payload(self, thread_id: str, text: str) -> Any:
+        """Nouveau tour, ou reprise du graphe s'il attend la réponse à une question."""
+        return Command(resume=text) if self.waiting_for_answer(thread_id) else {"user_input": text}
+
+    def stream(self, thread_id: str, text: str) -> Iterator[dict[str, Any]]:
+        """Diffuse le tour en direct : un événement par nouvelle étape, puis le résultat final.
+
+        Événements : {"type": "etape", "texte": ...}, puis un seul
+        {"type": "reponse" | "question", "texte": ..., "scenario": ..., "trace": ..., "llm_calls": ...}.
+        """
+        cfg = self._config(thread_id)
+        seen = 0
+        question = None
+        for chunk in self.graph.stream(self._payload(thread_id, text), cfg, stream_mode="updates"):
+            for node, update in chunk.items():
+                if node == "__interrupt__":
+                    question = update[0].value["question"]
+                    continue
+                trace = (update or {}).get("trace")
+                if trace and len(trace) > seen:
+                    for step in trace[max(seen, 1) :]:  # « début » n'est pas affiché
+                        yield {"type": "etape", "texte": step}
+                    seen = len(trace)
+        values = self.state(thread_id)
+        yield {
+            "type": "question" if question else "reponse",
+            "texte": question or values.get("answer", ""),
+            "scenario": values.get("scenario"),
+            "trace": values.get("trace", []),
+            "llm_calls": values.get("llm_calls", 0),
+        }
+
     def send(self, thread_id: str, text: str) -> TurnResult:
         cfg = self._config(thread_id)
-        payload: Any = (
-            Command(resume=text) if self.waiting_for_answer(thread_id) else {"user_input": text}
-        )
-        out = self.graph.invoke(payload, cfg)
+        out = self.graph.invoke(self._payload(thread_id, text), cfg)
         common = {
             "scenario": out.get("scenario"),
             "result": out.get("result"),

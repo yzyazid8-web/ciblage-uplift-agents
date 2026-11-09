@@ -311,3 +311,40 @@ def test_question_about_excluded_clients_is_routed_to_the_plan(planner):
     c.send("t27", "plan complet")
     c.send("t27", "Qui sont les clients écartés ?")
     assert c.state("t27")["facts_kind"] == "explication_ecartes"
+
+
+def test_stream_emits_steps_then_final_answer(planner):
+    c = copilot(planner)
+    events = list(c.stream("t28", "plan complet"))
+    steps = [e["texte"] for e in events if e["type"] == "etape"]
+    assert "calcul du plan" in steps and "vérification : conforme" in steps
+    assert events[-1]["type"] == "reponse" and events[-1]["scenario"]["budget"] == 600
+    question = list(c.stream("t29", "plan sans coût femme"))[-1]
+    assert question["type"] == "question" and "coût d'un e-mail femme" in question["texte"]
+    answer = list(c.stream("t29", "0,10 €"))[-1]  # reprise du graphe interrompu
+    assert answer["type"] == "reponse"
+
+
+def test_dashboard_scenario_is_synced_into_the_agent(planner):
+    """Le scénario affiché (formulaire) est transmis à l'agent : « la moitié » s'applique dessus."""
+    c = copilot(planner)
+    shown = {
+        "budget": 800.0,
+        "cost_homme": 0.12,
+        "cost_femme": 0.10,
+        "max_homme": None,
+        "max_femme": None,
+        "objective": "visites",
+        "value_per_visit": 1.0,
+    }
+    assert c.sync_scenario("t30", shown)
+    assert not c.sync_scenario("t30", shown)  # déjà aligné : rien à faire
+    r = c.send("t30", "moitié")
+    assert r.kind == "reponse" and r.scenario["budget"] == 400
+
+
+def test_sync_never_breaks_a_pending_question(planner):
+    c = copilot(planner)
+    c.send("t31", "plan sans coût femme")
+    assert not c.sync_scenario("t31", {"budget": 50.0})
+    assert c.send("t31", "0,10 €").scenario["budget"] == 600

@@ -134,17 +134,9 @@ def _(
                 "Qui sont les clients écartés ?",
                 "Compare les scénarios.",
             ],
-            max_height=520,
         )
-    # panneau isolé à droite (voir app.css), qui défile indépendamment des résultats
-    mo.sidebar(
-        [
-            mo.md("### Agent de ciblage"),
-            chat,
-            mo.md(f"*Session `{session_id}` : sauvegardée, reprenable via l'API.*"),
-        ],
-        width="460px",
-    )
+    # panneau isolé à droite (voir app.css) : le chat en occupe toute la hauteur
+    mo.sidebar([mo.md("### Agent de ciblage"), chat], width="460px")
     return
 
 

@@ -10,6 +10,18 @@ div.flex:has(> aside.app-sidebar) > div.absolute.top-3 {
   right: 1rem;
 }
 
+/* l'agent prend toute la hauteur du panneau : marges réduites (le haut garde la place du
+   bouton de repli), et le conteneur ne grandit plus avec la conversation ; ce sont les
+   messages qui défilent, la zone de saisie reste visible en bas */
+aside.app-sidebar > div.overflow-y-auto {
+  padding-top: 3rem;
+  padding-bottom: 0.75rem;
+}
+
+aside.app-sidebar > div.overflow-y-auto > div {
+  min-height: 0;
+}
+
 /* petits écrans : marimo masque le panneau ; on le garde, sous les résultats */
 @media (max-width: 1023px) {
   div.flex:has(> aside.app-sidebar) {

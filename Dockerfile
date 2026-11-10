@@ -30,6 +30,10 @@ RUN pip install --no-cache-dir --user --no-deps -e .
 # Données Hillstrom téléchargées À LA CONSTRUCTION : le conteneur démarre sans dépendre du site source
 RUN python -c "from ciblage.data import hillstrom; hillstrom.download(); print('Hillstrom :', len(hillstrom.load()), 'clients')"
 
+# Modèles entraînés et résultats pré-calculés À LA CONSTRUCTION : le conteneur démarre sans entraîner
+# (réveil plus rapide quand l'hébergeur le rallume, et moins de calcul sur un petit processeur)
+RUN python -m ciblage.serve.planner
+
 COPY --chown=user app.py ./
 
 # Tableau de bord marimo (conversation avec l'agent + graphiques). Pour l'API :

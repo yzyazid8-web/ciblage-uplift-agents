@@ -72,3 +72,21 @@ def test_invalid_scenarios_are_rejected_in_plain_language(planner, scenario, mes
 def test_assignment_codes(planner):
     a = planner.plan(Scenario(budget=400.0), compare=False).assignment
     assert set(np.unique(a)) <= {0, 1, 2}
+
+
+def test_cache_gives_identical_planner_without_training(planner, tmp_path):
+    """Démarrage rapide (conteneur) : même portefeuille, mêmes prédictions, mêmes plans."""
+    path = planner.save_cache(tmp_path / "cache.joblib")
+    fast = Planner(cache=path)
+    np.testing.assert_array_equal(fast.uplift, planner.uplift)
+    np.testing.assert_array_equal(fast.response, planner.response)
+    a = planner.plan(Scenario(budget=500.0), compare=False).assignment
+    np.testing.assert_array_equal(fast.plan(Scenario(budget=500.0), compare=False).assignment, a)
+
+
+def test_cache_with_other_settings_is_ignored(planner, tmp_path):
+    path = planner.save_cache(tmp_path / "cache.joblib")
+    other = Planner(
+        seed=planner.seed + 1, cache=path
+    )  # autre graine : cache ignoré, nouvel entraînement
+    assert not np.array_equal(other.uplift, planner.uplift)

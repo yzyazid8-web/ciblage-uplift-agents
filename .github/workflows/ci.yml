@@ -41,6 +41,9 @@ jobs:
   docker:
     needs: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # publication de l'image sur GitHub Container Registry
     steps:
       - uses: actions/checkout@v5
 
@@ -72,3 +75,16 @@ jobs:
             -d '{"budget": 500, "compare": false}' \
             | python3 -c "import json,sys; s=json.load(sys.stdin)['summary']; assert s['depense'] <= 500 and s['clients_contactes'] > 0; print('Plan OK :', s['clients_contactes'], 'clients,', round(s['depense'], 2), 'EUR')"
           docker rm -f api
+
+      # 3. Publication de l'image (uniquement sur main, et seulement si les tests de démarrage passent).
+      #    GitHub Container Registry est gratuit pour une image publique ; l'hébergeur (Azure
+      #    Container Apps) vient la chercher là.
+      - name: Publication sur GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMAGE=ghcr.io/${{ github.repository_owner }}/ciblage-uplift-agents
+          docker tag ciblage:ci "$IMAGE:latest"
+          docker tag ciblage:ci "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${{ github.sha }}"

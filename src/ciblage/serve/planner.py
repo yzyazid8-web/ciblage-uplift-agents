@@ -1,11 +1,15 @@
-"""Planificateur : d'un scénario (budget, coûts, contraintes) à un plan d'envoi, avec ses preuves."""
+"""Planificateur : d'un scénario (budget, couts, contraintes) à un plan d'envoi."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Literal
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -83,10 +87,41 @@ def _segments(df: pd.DataFrame) -> pd.Series:
     )
 
 
+CACHE_PATH = config.ROOT / "models" / "planner_cache.joblib"
+
+
+def _cache_key(seed: int) -> str:
+    """Empreinte des réglages : un cache produit avec d'autres réglages est ignoré."""
+    raw = json.dumps(
+        {
+            "params": chosen.PARAMS,
+            "learner": chosen.LEARNER.name,
+            "test_size": chosen.TEST_SIZE,
+            "seed": seed,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+
 class Planner:
     """Entraîne une fois les modèles, puis produit des plans."""
 
-    def __init__(self, seed: int = config.SEED) -> None:
+    def __init__(self, seed: int = config.SEED, cache: Path | None = CACHE_PATH) -> None:
+        """Charge les résultats pré-calculés s'ils existent et correspondent aux réglages
+        (démarrage rapide, sans entraînement : utile dans le conteneur) ; sinon entraîne."""
+        self.seed = seed
+        if cache is not None and cache.exists():
+            saved = joblib.load(cache)
+            if saved.get("key") == _cache_key(seed):
+                self._set(
+                    saved["uplift"],
+                    saved["response"],
+                    saved["treatment"],
+                    saved["visit"],
+                    saved["clients"],
+                )
+                return
         h = hillstrom.load()
         X = hillstrom.encode_features(h).to_numpy()
         t, y = h["treatment"].to_numpy(), h["visit"].to_numpy()
@@ -94,12 +129,37 @@ class Planner:
         model = chosen.LEARNER(params=chosen.PARAMS, propensity=PROP, seed=seed).fit(
             X[tr], t[tr], y[tr]
         )
-        self.seed = seed
-        self.uplift = model.predict(X[te])  # (n_test, 2) : visites en plus par e-mail
-        self.response = fit_response(X[tr], t[tr], y[tr], seed).predict_proba(X[te])[:, 1]
-        self.treatment, self.visit = t[te], y[te]
-        self.clients = h.iloc[te].reset_index(drop=True)
+        self._set(
+            model.predict(X[te]),  # (n_test, 2) : visites en plus par e-mail
+            fit_response(X[tr], t[tr], y[tr], seed).predict_proba(X[te])[:, 1],
+            t[te],
+            y[te],
+            h.iloc[te].reset_index(drop=True),
+        )
+
+    def _set(self, uplift, response, treatment, visit, clients: pd.DataFrame) -> None:
+        self.uplift, self.response = np.asarray(uplift), np.asarray(response)
+        self.treatment, self.visit = np.asarray(treatment), np.asarray(visit)
+        self.clients = clients
         self.segment = _segments(self.clients)
+
+    def save_cache(self, path: Path = CACHE_PATH) -> Path:
+        """Enregistre les résultats (écriture atomique) pour un démarrage sans entraînement."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".part")
+        joblib.dump(
+            {
+                "key": _cache_key(self.seed),
+                "uplift": self.uplift,
+                "response": self.response,
+                "treatment": self.treatment,
+                "visit": self.visit,
+                "clients": self.clients,
+            },
+            tmp,
+        )
+        tmp.replace(path)
+        return path
 
     @property
     def n_clients(self) -> int:
@@ -185,7 +245,7 @@ class Planner:
         return pd.DataFrame(rows)
 
     def compare(self, sc: Scenario, a: np.ndarray, n_boot: int = 300) -> pd.DataFrame:
-        """Valeur MESURÉE (IPW sur le test randomisé) du plan face aux alternatives, même budget."""
+        """Valeur mesuree (IPW sur le test randomisé) du plan face aux alternatives, même budget."""
         n_classic = (
             int(min(self.n_clients, sc.budget // sc.cost_homme))
             if sc.cost_homme > 0
@@ -227,3 +287,13 @@ class Planner:
                 }
             )
         return pd.DataFrame(rows)
+
+
+def main() -> None:
+    """python -m ciblage.serve.planner : pré-calcule les résultats (utilisé à la construction de l'image)."""
+    path = Planner(cache=None).save_cache()
+    print(f"Résultats pré-calculés : {path}")
+
+
+if __name__ == "__main__":
+    main()

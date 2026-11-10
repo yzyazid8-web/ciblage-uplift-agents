@@ -18,6 +18,9 @@ env/
 # « /data/ » et non « data/ » : sinon le paquet src/ciblage/data/ serait ignoré lui aussi
 /data/
 
+# --- Résultats pré-calculés du planificateur (régénérés par script) ---
+/models/
+
 # --- MLflow / artefacts d'expériences ---
 mlruns/
 mlartifacts/

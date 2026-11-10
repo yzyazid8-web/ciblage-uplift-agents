@@ -312,6 +312,8 @@ le ciblage classique. La méthode fait la différence quand l'effet varie (e-mai
 """
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(page, encoding="utf-8")
+    # GitHub Pages : publier les fichiers tels quels, sans traitement Jekyll
+    (output.parent / ".nojekyll").touch()
     return output
 
 

@@ -19,6 +19,8 @@ class HeuristicResult:
     budget_price: float = float(
         "nan"
     )  # prix marginal du budget (lagrangien) : objectif gagné par euro en plus
+    # prix des limites d'envois (un par action ; 0 = la limite ne pèse pas sur la décision)
+    action_prices: np.ndarray | None = None
 
     @property
     def gap(self) -> float:

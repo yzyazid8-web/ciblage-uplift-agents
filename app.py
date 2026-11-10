@@ -127,6 +127,9 @@ def _(
                 "J'ai 700 €, l'e-mail homme coûte 0,12 € et l'e-mail femme 0,10 €.",
                 "Et avec 1 000 € ?",
                 "Est-ce que 100 € de plus valent le coup ?",
+                "Interprète le graphique 2.",
+                "Explique-moi les indicateurs.",
+                "Que fait cette application ?",
                 "Pourquoi le client 12 est-il contacté ou non ?",
                 "Qui sont les clients écartés ?",
                 "Compare les scénarios.",
@@ -274,7 +277,9 @@ def _(mo, plan):
         mo.stat(_gain, label="Gain mesuré vs ciblage classique", caption=_ci, bordered=True),
         mo.stat(
             f"{_s['prix_marginal_budget']:.2f}",
-            label="Visites par euro en plus",
+            label="Visites par euro en plus"
+            if plan.scenario.objective == "visites"
+            else "Profit par euro en plus (€)",
             caption=f"écart prouvé à l'optimum ≤ {100 * plan.bound_gap:.2f} %",
             bordered=True,
         ),
@@ -400,6 +405,9 @@ def _(mo):
                 - Chaque nombre de la réponse est **vérifié** contre les calculs avant affichage ; en
                   cas d'écart, la réponse est réécrite, puis remplacée par un texte standard sûr.
                 - S'il manque une information ou si la demande est ambiguë, il **pose une question**.
+                - Il peut **interpréter chaque résultat de l'écran** (« Interprète le graphique 2 »,
+                  « Explique-moi les indicateurs ») à partir des valeurs affichées, et répondre aux
+                  questions sur l'application elle-même (« Que fait cette application ? »).
                 - L'export du fichier de campagne n'est fait qu'après ta **confirmation** explicite.
                 - Les étapes (› …) s'affichent en direct au-dessus de chaque réponse.
                 """

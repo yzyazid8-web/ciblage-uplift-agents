@@ -57,6 +57,17 @@ def flatten(facts: object) -> list[float]:
     return values
 
 
+def numbers_in_text(facts: object) -> list[float]:
+    """Nombres écrits DANS les textes d'un dossier."""
+    if isinstance(facts, str):
+        return [value for _, value, _ in parse_numbers(facts)]
+    if isinstance(facts, Mapping):
+        return [x for v in facts.values() for x in numbers_in_text(v)]
+    if isinstance(facts, Iterable) and not isinstance(facts, bytes):
+        return [x for v in facts for x in numbers_in_text(v)]
+    return []
+
+
 def _matches(x: float, decimals: int, allowed: Iterable[float]) -> bool:
     tol = 0.5 * 10 ** (-decimals) + 1e-9  # un arrondi correct à `decimals` décimales
     for v in allowed:

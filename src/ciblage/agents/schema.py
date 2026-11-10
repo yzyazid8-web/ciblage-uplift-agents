@@ -12,11 +12,13 @@ Intent = Literal[
     "modifier",  # « et si » : changer un paramètre du scénario en cours
     "comparer",  # comparer des scénarios déjà calculés
     "conseil",  # « ça vaut le coup d'ajouter 100 € ? », seuils de coût
-    "expliquer",  # pourquoi tel segment / tel client reçoit tel e-mail
+    "expliquer",  # pourquoi tel segment / tel client reçoit tel e-mail, ou un résultat affiché
     "donnees",  # question sur le portefeuille de clients
     "exporter",  # produire le fichier de campagne (action à valider)
+    "application",  # question sur l'outil lui-même : but, écran, méthode, données, agent
     "hors_sujet",
 ]
+Element = Literal["indicateurs", "graphique_taux_de_visite", "graphique_segments"]
 
 
 class Understanding(BaseModel):
@@ -63,6 +65,11 @@ class Understanding(BaseModel):
     )
     advice_topic: Literal["budget", "cout_homme", "cout_femme"] | None = Field(
         None, description="Sujet d'une demande de conseil : le budget, ou le coût d'un des e-mails"
+    )
+    element: Element | None = Field(
+        None,
+        description="Élément de l'écran à interpréter : les indicateurs du haut, le graphique 1 "
+        "(taux de visite mesuré par politique) ou le graphique 2 et son tableau (qui reçoit quoi par segment)",
     )
     ambiguities: list[str] = Field(
         default_factory=list,

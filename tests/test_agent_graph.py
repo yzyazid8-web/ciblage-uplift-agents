@@ -32,6 +32,14 @@ U = {
     "conseil +100": Understanding(intent="conseil", advice_topic="budget", budget_delta=100),
     "conseil courbe": Understanding(intent="conseil", advice_topic="budget"),
     "conseil femme": Understanding(intent="conseil", advice_topic="cout_femme"),
+    "Interprète le graphique 2": Understanding(intent="expliquer", element="graphique_segments"),
+    "Explique les indicateurs": Understanding(intent="expliquer", element="indicateurs"),
+    "Que montre le graphique 1 ?": Understanding(intent="expliquer"),  # élément non extrait
+    "Que fait ce marimo ?": Understanding(intent="hors_sujet"),  # erreur vue en test réel
+    "C'est quoi l'uplift ?": Understanding(intent="application"),
+    "Explique-moi tous les résultats": Understanding(
+        intent="expliquer", ambiguities=["Quel élément de l'écran faut-il interpréter ?"]
+    ),
     "flou": Understanding(
         intent="plan", budget=600, ambiguities=["Le coût de 10 € est-il pour 100 e-mails ?"]
     ),
@@ -227,7 +235,7 @@ def test_explain_a_client_uses_the_profitability_threshold(planner):
     r = c.send("t20", "pourquoi client 5")
     assert r.kind == "reponse"
     facts = c.state("t20")["facts"]
-    assert facts["client"] == 5 and "seuil_de_rentabilite_visites_par_euro" in facts
+    assert facts["client"] == 5 and "seuil_de_rentabilite" in facts and facts["raison"]
     assert c.state("t20")["facts_kind"] == "explication_client"
 
 
@@ -245,8 +253,56 @@ def test_explain_segment_excluded_and_all_segments(planner):
     assert c.state("t22")["facts"]["segment"] == "homme seulement"
     c.send("t22", "qui est écarté")
     assert c.state("t22")["facts_kind"] == "explication_ecartes"
-    c.send("t22", "pourquoi")
+    c.send("t22", "pourquoi")  # sans précision : tout l'écran
+    assert c.state("t22")["facts_kind"] == "explication_resultats"
+    c.send("t22", "Interprète le graphique 2")
+    assert c.state("t22")["facts_kind"] == "explication_segments"
     assert len(c.state("t22")["facts"]["segments"]) == 3
+
+
+def test_every_displayed_result_can_be_explained(planner):
+    c = copilot(planner)
+    c.send("t30", "plan complet")
+    c.send("t30", "Explique les indicateurs")
+    assert c.state("t30")["facts_kind"] == "explication_indicateurs"
+    assert len(c.state("t30")["facts"]["indicateurs"]) == 5
+    # le LLM n'a pas extrait l'élément : la règle déterministe le repère dans la question
+    r = c.send("t30", "Que montre le graphique 1 ?")
+    assert c.state("t30")["facts_kind"] == "explication_politiques"
+    assert any("élément de l'écran repéré" in step for step in r.trace)
+
+
+def test_questions_about_the_app_are_answered_not_refused(planner):
+    """Vu en test réel : « Que fait ce marimo ? » était refusé comme hors sujet."""
+    c = copilot(planner)
+    r = c.send("t31", "Que fait ce marimo ?")
+    assert r.kind == "reponse" and r.text != REFUSAL
+    assert c.state("t31")["facts_kind"] == "application"
+    assert any("application" in step for step in r.trace)
+    c.send("t31", "C'est quoi l'uplift ?")  # aucun scénario nécessaire
+    assert c.state("t31")["facts_kind"] == "application"
+    assert c.send("t31", "météo").text == REFUSAL  # le vrai hors sujet reste refusé
+
+
+def test_empty_answer_is_rejected_then_replaced_by_the_safe_text(planner):
+    """Vu en test réel : un texte vide (aucun chiffre) passait le contrôle de fidélité."""
+    r = copilot(planner, writer=lambda messages: "  ").send("t34", "plan complet")
+    assert r.text.startswith("Plan recommandé") and r.llm_calls == 3
+    assert r.trace.count("rédaction : réponse vide") == 2
+
+
+def test_explanation_requests_never_ask_a_useless_question(planner):
+    """Vu en test réel : « Explique-moi tous les résultats » renvoyait « quel élément ? »."""
+    c = copilot(planner)
+    c.send("t33", "plan complet")
+    r = c.send("t33", "Explique-moi tous les résultats")
+    assert r.kind == "reponse" and c.state("t33")["facts_kind"] == "explication_resultats"
+
+
+def test_screen_question_without_a_plan_falls_back_to_the_guide(planner):
+    c = copilot(planner)
+    c.send("t32", "Que montre le graphique 1 ?")
+    assert c.state("t32")["facts_kind"] == "application"
 
 
 def test_data_questions_need_no_scenario(planner):
@@ -281,13 +337,15 @@ def test_too_long_message_is_rejected_without_calling_the_llm(planner):
 def test_generic_fallback_is_faithful(planner):
     from ciblage.agents import faithfulness
     from ciblage.agents.graph import fallback
-    from ciblage.serve import explainer
+    from ciblage.serve import explainer, guide
     from ciblage.serve.planner import Scenario
 
     sc = Scenario(budget=500.0)
     for kind, facts in {
         "explication_client": explainer.client_explanation(planner, sc, 3),
         "explication_ecartes": explainer.excluded_profile(planner, sc),
+        "explication_segments": explainer.segments_explanation(planner, sc),
+        "application": guide.app_guide(planner),
         "donnees": explainer.portfolio_overview(planner),
     }.items():
         text = fallback(kind, facts)

@@ -120,4 +120,5 @@ def solve_lagrange(problem: Problem) -> HeuristicResult:
         time.perf_counter() - start,
         bound=bound,
         budget_price=lam,  # dualité : gain de l'objectif pour un euro de budget supplémentaire
+        action_prices=mu,
     )

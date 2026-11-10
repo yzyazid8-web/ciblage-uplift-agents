@@ -15,7 +15,7 @@ from ciblage.agents import faithfulness, prompts
 from ciblage.agents.llm import Understander, Writer, understand_messages
 from ciblage.agents.schema import AgentState, Understanding
 from ciblage.agents.verify import verify_plan
-from ciblage.serve import advisor, explainer, export
+from ciblage.serve import advisor, explainer, export, guide
 from ciblage.serve.planner import Planner, Scenario
 
 REQUIRED = {
@@ -29,6 +29,23 @@ MAX_MESSAGE_CHARS = 2_000  # protège le quota : un message plus long n'est pas 
 EXCLUDED_WORDS = re.compile(
     r"(écart|exclu|non[- ]contact|pas contact|laiss\w* de côté)", re.IGNORECASE
 )
+# éléments de l'écran, repérés dans la question si le LLM ne les a pas extraits
+ELEMENTS = {
+    "graphique_segments": re.compile(
+        r"(graph\w*\s*(n°\s*|numéro\s*)?2\b|(deuxième|second) graph|qui re[çc]oi\w* quoi"
+        r"|d[ée]j[àa] achet|d[ée]tail par segment|tableau (par|des) segments?)",
+        re.IGNORECASE,
+    ),
+    "graphique_taux_de_visite": re.compile(
+        r"(graph\w*\s*(n°\s*|numéro\s*)?1\b|premier graph|taux de visite mesur)", re.IGNORECASE
+    ),
+    "indicateurs": re.compile(r"(indicateurs?|kpi|cases? du haut|chiffres du haut)", re.IGNORECASE),
+}
+APP_WORDS = re.compile(
+    r"(marimo|\bappli\w*|tableau de bord|dashboard|\bcet outil|\bce site|cette page|interface"
+    r"|comment (ça|ca) marche|comment l'utiliser)",
+    re.IGNORECASE,
+)
 MARKDOWN = re.compile(r"\*\*|__")  # gras markdown, retiré malgré la consigne si le LLM en met
 NEXT_STEP = {"conseil": "advise", "expliquer": "explain_decision", "exporter": "confirm_export"}
 YES = re.compile(
@@ -38,7 +55,8 @@ SCENARIO_FIELDS = {f for f in Scenario.__dataclass_fields__}
 
 REFUSAL = (
     "Je suis un copilote de campagnes : je calcule qui contacter, avec quel e-mail et pour quel "
-    "budget, et j'explique ce que le plan rapporte. Je ne peux pas traiter cette demande."
+    "budget, j'explique les résultats affichés et je réponds aux questions sur cette application. "
+    "Je ne peux pas traiter cette demande."
 )
 
 
@@ -234,6 +252,13 @@ def generic_template(facts: dict[str, Any]) -> str:
 
 
 def fallback(kind: str, facts: dict[str, Any]) -> str:
+    if kind == "application":
+        return (
+            f"{facts['role']} {facts['idee_cle']} Le panneau de droite : "
+            f"{facts['ecran']['panneau_de_droite']}. À gauche : "
+            + " ; ".join(facts["ecran"]["zone_de_gauche_de_haut_en_bas"])
+            + "."
+        )
     if kind == "plan":
         return template_answer(facts)
     if kind.startswith(("conseil", "comparaison")):
@@ -283,6 +308,32 @@ def correct_intent(
         # « qui sont les clients écartés ? » porte sur le PLAN, pas sur le portefeuille
         u["intent"], u["about_excluded"] = "expliquer", True
         notes.append("superviseur : question sur les clients écartés -> explication du plan")
+    if not u.get("element") and u["intent"] in (
+        "expliquer",
+        "application",
+        "hors_sujet",
+        "donnees",
+    ):
+        element = next((k for k, rx in ELEMENTS.items() if rx.search(question or "")), None)
+        if element:
+            u["element"] = element
+            notes.append(f"superviseur : élément de l'écran repéré ({element})")
+    if u.get("element") and u["intent"] in ("expliquer", "application", "hors_sujet", "donnees"):
+        # interpréter un résultat affiché demande le plan à l'écran ; sans plan, le guide suffit
+        target = "expliquer" if has_scenario else "application"
+        if u["intent"] != target:
+            u["intent"] = target
+            notes.append(f"superviseur : question sur l'écran -> {target}")
+    if u["intent"] in ("expliquer", "application") and u.get("ambiguities"):
+        # une explication n'oblige jamais à deviner (sans précision : tout l'écran) ; vu en test
+        # réel : « Explique-moi tous les résultats » renvoyait une question inutile
+        u["ambiguities"] = []
+        notes.append("superviseur : ambiguïté ignorée (demande d'explication)")
+    if u["intent"] == "hors_sujet" and APP_WORDS.search(question or ""):
+        u["intent"] = "application"
+        notes.append(
+            "superviseur : « hors sujet » corrigé en « application » (question sur l'outil)"
+        )
     return u, notes
 
 
@@ -341,6 +392,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "exporter": "assemble",
             "comparer": "compare",
             "donnees": "data",
+            "application": "app_help",
             "hors_sujet": "refuse",
         }
         route = routes.get(intent, "not_yet")
@@ -406,7 +458,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
 
     def compute(state: AgentState) -> dict[str, Any]:
         sc = _scenario(state["draft"])
-        plan = deps.planner.plan(sc, n_boot=200)
+        plan = deps.planner.plan(sc)  # même mesure que l'écran (mêmes intervalles de confiance)
         issues = verify_plan(plan)
         if issues:  # l'optimiseur est déterministe : un nouvel essai donnerait le même plan
             return {
@@ -489,6 +541,8 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     def write(state: AgentState) -> dict[str, Any]:
         """Rédaction par le LLM, contrôle des chiffres, nouvelle rédaction puis repli sûr."""
         facts, kind = state.get("facts") or {}, state["facts_kind"]
+        # le guide de l'application cite quelques nombres dans ses textes (exemples de questions)
+        extra = faithfulness.numbers_in_text(facts) if kind == "application" else []
         msgs = [
             ("system", prompts.PROMPTS[kind]),
             ("user", f"QUESTION : {state.get('turn_question', '')}"),
@@ -498,7 +552,10 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         for attempt in range(2):
             text = deps.write(msgs)
             calls += 1
-            report = faithfulness.check(text, facts)
+            if not text.strip():
+                trace.append("rédaction : réponse vide")
+                continue
+            report = faithfulness.check(text, facts, extra_allowed=extra)
             if report.ok:
                 trace.append(f"rédaction : chiffres vérifiés (essai {attempt + 1})")
                 return {"answer": MARKDOWN.sub("", text), "llm_calls": calls, "trace": trace}
@@ -522,14 +579,18 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             elif req.get("about_excluded"):
                 facts = explainer.excluded_profile(deps.planner, sc)
                 kind = "explication_ecartes"
-            else:
-                facts = {
-                    "segments": [
-                        explainer.segment_explanation(deps.planner, sc, seg)
-                        for seg in explainer.SEGMENTS
-                    ]
-                }
+            elif req.get("element") == "indicateurs":
+                facts = explainer.indicators_explanation(deps.planner, sc)
+                kind = "explication_indicateurs"
+            elif req.get("element") == "graphique_taux_de_visite":
+                facts = explainer.policies_explanation(deps.planner, sc)
+                kind = "explication_politiques"
+            elif req.get("element") == "graphique_segments":
+                facts = explainer.segments_explanation(deps.planner, sc)
                 kind = "explication_segments"
+            else:  # « explique-moi les résultats » : tout l'écran, de haut en bas
+                facts = explainer.results_overview(deps.planner, sc)
+                kind = "explication_resultats"
         except ValueError as err:  # numéro de client hors portefeuille, segment inconnu
             return {
                 "answer": f"{err}.",
@@ -554,6 +615,14 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "facts": explainer.portfolio_overview(deps.planner, segment),
             "facts_kind": "donnees",
             "trace": state["trace"] + ["données : portrait du portefeuille"],
+        }
+
+    def app_help(state: AgentState) -> dict[str, Any]:
+        """Questions sur l'outil lui-même : le guide de l'application sert de dossier de faits."""
+        return {
+            "facts": guide.app_guide(deps.planner),
+            "facts_kind": "application",
+            "trace": state["trace"] + ["aide : guide de l'application"],
         }
 
     def confirm_export(state: AgentState) -> dict[str, Any]:
@@ -616,6 +685,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         "compare": compare,
         "explain_decision": explain_decision,
         "data": data,
+        "app_help": app_help,
         "confirm_export": confirm_export,
         "too_long": too_long,
         "write": write,
@@ -634,6 +704,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "assemble": "assemble",
             "compare": "compare",
             "data": "data",
+            "app_help": "app_help",
             "refuse": "refuse",
             "not_yet": "not_yet",
             "end": END,  # la compréhension a échoué : la réponse d'excuse est déjà prête
@@ -648,6 +719,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         "explain_decision", lambda s: s["route"], {"write": "write", "end": END}
     )
     g.add_edge("data", "write")
+    g.add_edge("app_help", "write")
     g.add_conditional_edges(
         "clarify", lambda s: s["route"], {"understand": "understand", "end": END}
     )

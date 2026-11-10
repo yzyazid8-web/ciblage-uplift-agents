@@ -63,6 +63,8 @@ class Plan:
     seconds: float
     by_segment: pd.DataFrame
     comparison: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # prix des limites d'envois (homme, femme) : > 0 quand une limite pèse sur la décision
+    action_prices: np.ndarray = field(default_factory=lambda: np.zeros(len(ACTIONS)))
 
     def to_dict(self) -> dict:
         """Version sérialisable (pour l'API et les agents)."""
@@ -165,7 +167,8 @@ class Planner:
     def n_clients(self) -> int:
         return len(self.visit)
 
-    def _problem(self, sc: Scenario):
+    def problem(self, sc: Scenario):
+        """Problème d'optimisation du scénario (score = gain prédit par client et par e-mail)."""
         cost = [sc.cost_homme, sc.cost_femme]
         capacity = [np.inf if c is None else c for c in (sc.max_homme, sc.max_femme)]
         if sc.objective == "profit":
@@ -187,7 +190,7 @@ class Planner:
         if errs:
             raise ValueError(" ".join(errs))
         start = time.perf_counter()
-        problem = self._problem(sc)
+        problem = self.problem(sc)
         res = lagrange.solve_lagrange(problem)
         a = res.assignment
         assert violations(problem, a) == [], "Plan infaisable : bogue de l'optimiseur"
@@ -223,6 +226,8 @@ class Planner:
             seconds=time.perf_counter() - start,
             by_segment=self._by_segment(a),
         )
+        if res.action_prices is not None:
+            plan.action_prices = np.asarray(res.action_prices, dtype=float)
         if compare:
             plan.comparison = self.compare(sc, a, n_boot=n_boot)
         return plan

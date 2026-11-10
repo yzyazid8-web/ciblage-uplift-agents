@@ -1,0 +1,41 @@
+/* Panneau de l'agent à droite : mo.sidebar s'affiche à gauche par défaut.
+   Le panneau et les résultats défilent chacun de leur côté. */
+div.flex:has(> aside.app-sidebar) {
+  flex-direction: row-reverse;
+}
+
+/* bouton de réouverture du panneau replié : à droite, avec le panneau */
+div.flex:has(> aside.app-sidebar) > div.absolute.top-3 {
+  left: auto;
+  right: 1rem;
+}
+
+/* petits écrans : marimo masque le panneau ; on le garde, sous les résultats */
+@media (max-width: 1023px) {
+  div.flex:has(> aside.app-sidebar) {
+    flex-direction: column;
+  }
+
+  div.flex:has(> aside.app-sidebar) > div.mathjax_ignore {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  div.flex:has(> aside.app-sidebar) > aside.app-sidebar {
+    display: block;
+    order: 2;
+    width: 100% !important;
+    height: 60vh;
+    flex: none;
+    border-top: 1px solid var(--border, #e4e3df);
+  }
+
+  div.flex:has(> aside.app-sidebar) > aside.app-sidebar > div.overflow-y-auto {
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+
+  div.flex:has(> aside.app-sidebar) > div.absolute.top-3 {
+    display: none;
+  }
+}

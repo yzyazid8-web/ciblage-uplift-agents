@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.25.2"
-app = marimo.App(width="medium", app_title="Copilote de ciblage")
+app = marimo.App(width="medium", app_title="Copilote de ciblage", css_file="app.css")
 
 
 @app.cell
@@ -49,6 +49,9 @@ def _(mo):
         Portefeuille : **19 200 clients** d'une vraie campagne randomisée (Hillstrom), jamais vus par
         les modèles. Comme les e-mails y ont été envoyés au hasard, on peut **mesurer** ce que chaque
         plan aurait rapporté, et pas seulement le prédire.
+
+        Décris ta campagne à **l'agent, dans le panneau de droite**, ou utilise le formulaire
+        ci-dessous : les résultats se mettent à jour dans les deux cas.
         """
     )
     return
@@ -80,7 +83,6 @@ def _(mo, planner, uuid):
     except LLMUnavailable as _err:
         copilot, agent_error = None, str(_err)
     session_id = f"marimo-{uuid.uuid4().hex[:8]}"
-    mo.md(f"*Session de conversation : `{session_id}` (sauvegardée, reprenable via l'API).*")
     return agent_error, copilot, session_id
 
 
@@ -131,33 +133,54 @@ def _(
             ],
             max_height=520,
         )
-    return (chat,)
+    # panneau isolé à droite (voir app.css), qui défile indépendamment des résultats
+    mo.sidebar(
+        [
+            mo.md("### Agent de ciblage"),
+            chat,
+            mo.md(f"*Session `{session_id}` : sauvegardée, reprenable via l'API.*"),
+        ],
+        width="460px",
+    )
+    return
 
 
 @app.cell
 def _(mo):
+    # grille de 3 colonnes : chaque libellé au-dessus de son champ
+    def _field(label: str, key: str) -> str:
+        return (
+            f"<div><div style='font-weight:600;margin-bottom:.25rem'>{label}</div>{{{key}}}</div>"
+        )
+
+    _grid = "display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.9rem 1.25rem"
     form = (
-        mo.md(
-            """
-            **Budget (€)** {budget} **Coût e-mail homme (€)** {cost_h} **Coût e-mail femme (€)** {cost_f}
-
-            **Envois max. e-mail homme** {max_h} **Envois max. e-mail femme** {max_f} *(0 = sans limite)*
-
-            **Objectif** {objective} **Valeur d'une visite (€, objectif profit)** {value}
-            """
+        mo.Html(
+            f"<div style='{_grid}'>"
+            + _field("Budget (€)", "budget")
+            + _field("Coût e-mail homme (€)", "cost_h")
+            + _field("Coût e-mail femme (€)", "cost_f")
+            + _field("Envois max. e-mail homme", "max_h")
+            + _field("Envois max. e-mail femme", "max_f")
+            + _field("Valeur d'une visite (€)", "value")
+            + "</div>"
+            + "<div style='margin-top:.9rem'><b>Objectif</b> {objective}</div>"
+            + "<div style='color:var(--muted-foreground);font-size:.85em;margin-top:.4rem'>"
+            + "Envois max. : 0 = sans limite. La valeur d'une visite ne sert qu'à l'objectif profit."
+            + "</div>"
         )
         .batch(
-            budget=mo.ui.number(start=0, stop=10_000, step=10, value=700),
-            cost_h=mo.ui.number(start=0, stop=10, step=0.01, value=0.12),
-            cost_f=mo.ui.number(start=0, stop=10, step=0.01, value=0.10),
-            max_h=mo.ui.number(start=0, stop=20_000, step=100, value=0),
-            max_f=mo.ui.number(start=0, stop=20_000, step=100, value=0),
+            budget=mo.ui.number(start=0, stop=10_000, step=10, value=700, full_width=True),
+            cost_h=mo.ui.number(start=0, stop=10, step=0.01, value=0.12, full_width=True),
+            cost_f=mo.ui.number(start=0, stop=10, step=0.01, value=0.10, full_width=True),
+            max_h=mo.ui.number(start=0, stop=20_000, step=100, value=0, full_width=True),
+            max_f=mo.ui.number(start=0, stop=20_000, step=100, value=0, full_width=True),
             objective=mo.ui.radio(
                 options={"Maximiser les visites": "visites", "Maximiser le profit": "profit"},
                 value="Maximiser les visites",
                 inline=True,
             ),
-            value=mo.ui.number(start=0, stop=100, step=0.5, value=5.0),
+            value=mo.ui.number(start=0, stop=100, step=0.5, value=5.0, full_width=True),
         )
         .form(submit_button_label="Calculer le plan", bordered=True)
     )
@@ -165,8 +188,8 @@ def _(mo):
 
 
 @app.cell
-def _(chat, form, mo):
-    mo.ui.tabs({"Conversation avec l'agent": chat, "Formulaire": form})
+def _(form):
+    form
     return
 
 
@@ -205,13 +228,12 @@ def _(get_scenario, get_source, mo, planner):
             for k, n in (("homme", scenario.max_homme), ("femme", scenario.max_femme))
             if n
         )
+        _budget = f"{scenario.budget:,.0f}".replace(",", " ")
         _out = mo.callout(
             mo.md(
-                f"**Plan affiché** (source : {get_source()}) : budget {scenario.budget:,.0f} €, "
+                f"**Plan affiché** (source : {get_source()}) : budget {_budget} €, "
                 f"e-mail homme {scenario.cost_homme:.2f} €, e-mail femme {scenario.cost_femme:.2f} €, "
-                f"objectif {scenario.objective}{' ; ' + _limits if _limits else ''}.".replace(
-                    ",", " "
-                )
+                f"objectif {scenario.objective}{' ; ' + _limits if _limits else ''}."
             ),
             kind="info",
         )
@@ -227,37 +249,41 @@ def _(mo, plan):
     _g = _c.loc["plan optimisé"]
     _gain = f"{_g['gain vs classique (pts)']:+.2f} pts"
     _ci = f"IC 95 % [{_g['gain_bas']:+.2f} ; {_g['gain_haut']:+.2f}]"
-    mo.hstack(
+    # 3 + 2 : le plan (qui, combien, quoi), puis les mesures pour décider
+    _row1 = [
+        mo.stat(
+            f"{_s['clients_contactes']:,}".replace(",", " "),
+            label="Clients contactés",
+            caption=f"homme {_s['email_homme']:,} · femme {_s['email_femme']:,}".replace(",", " "),
+            bordered=True,
+        ),
+        mo.stat(
+            f"{_s['depense']:,.0f} €".replace(",", " "),
+            label="Dépense",
+            caption=f"budget non utilisé : {_s['budget_inutilise']:.0f} €",
+            bordered=True,
+        ),
+        mo.stat(
+            f"{_s['visites_en_plus_predites']:,.0f}".replace(",", " "),
+            label="Visites en plus (prédites)",
+            caption=f"{_s['cout_par_visite_en_plus']:.2f} € par visite gagnée",
+            bordered=True,
+        ),
+    ]
+    _row2 = [
+        mo.stat(_gain, label="Gain mesuré vs ciblage classique", caption=_ci, bordered=True),
+        mo.stat(
+            f"{_s['prix_marginal_budget']:.2f}",
+            label="Visites par euro en plus",
+            caption=f"écart prouvé à l'optimum ≤ {100 * plan.bound_gap:.2f} %",
+            bordered=True,
+        ),
+    ]
+    mo.vstack(
         [
-            mo.stat(
-                f"{_s['clients_contactes']:,}".replace(",", " "),
-                label="Clients contactés",
-                caption=f"homme {_s['email_homme']:,} · femme {_s['email_femme']:,}".replace(
-                    ",", " "
-                ),
-                bordered=True,
-            ),
-            mo.stat(
-                f"{_s['depense']:,.0f} €".replace(",", " "),
-                label="Dépense",
-                caption=f"budget non utilisé : {_s['budget_inutilise']:.0f} €",
-                bordered=True,
-            ),
-            mo.stat(
-                f"{_s['visites_en_plus_predites']:,.0f}".replace(",", " "),
-                label="Visites en plus (prédites)",
-                caption=f"{_s['cout_par_visite_en_plus']:.2f} € par visite gagnée",
-                bordered=True,
-            ),
-            mo.stat(_gain, label="Gain mesuré vs ciblage classique", caption=_ci, bordered=True),
-            mo.stat(
-                f"{_s['prix_marginal_budget']:.2f}",
-                label="Visites par euro en plus",
-                caption=f"écart prouvé à l'optimum ≤ {100 * plan.bound_gap:.2f} %",
-                bordered=True,
-            ),
+            mo.hstack(_row1, widths="equal", gap=0.5),
+            mo.hstack(_row2, widths="equal", gap=0.5),
         ],
-        widths="equal",
         gap=0.5,
     )
     return

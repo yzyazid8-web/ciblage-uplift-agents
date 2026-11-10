@@ -34,7 +34,7 @@ RUN python -c "from ciblage.data import hillstrom; hillstrom.download(); print('
 # (réveil plus rapide quand l'hébergeur le rallume, et moins de calcul sur un petit processeur)
 RUN python -m ciblage.serve.planner
 
-COPY --chown=user app.py ./
+COPY --chown=user app.py app.css ./
 
 # Tableau de bord marimo (conversation avec l'agent + graphiques). Pour l'API :
 #   docker run -p 8000:8000 <image> uvicorn ciblage.serve.api:app --host 0.0.0.0 --port 8000

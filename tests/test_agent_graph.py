@@ -348,3 +348,30 @@ def test_sync_never_breaks_a_pending_question(planner):
     c.send("t31", "plan sans coût femme")
     assert not c.sync_scenario("t31", {"budget": 50.0})
     assert c.send("t31", "0,10 €").scenario["budget"] == 600
+
+
+def test_llm_failure_does_not_crash_the_turn(planner):
+    """Vu en évaluation : une réponse invalide du LLM (booléen à null) faisait planter le tour."""
+
+    def broken(messages):
+        raise ValueError("Tool call validation failed")
+
+    c = Copilot(Deps(planner=planner, understand=broken, write=faithful_writer))
+    r = c.send("t32", "plan complet")
+    assert r.kind == "reponse" and "reformuler" in r.text
+    assert any("échec" in step for step in r.trace)
+
+
+def test_implausible_cost_triggers_a_question(planner):
+    """Vu en évaluation : « l'e-mail homme à 12 » (sans unité) était lu comme 12 € par e-mail."""
+    U["sans unité"] = Understanding(intent="plan", budget=400, cost_homme=12, cost_femme=10)
+    r = copilot(planner).send("t33", "sans unité")
+    assert r.kind == "question" and "centimes" in r.text
+
+
+def test_null_booleans_are_accepted():
+    u = Understanding.model_validate(
+        {"intent": "expliquer", "about_excluded": None, "remove_limits": None}
+    )
+    draft, issues = merge({"budget": 100.0, "max_femme": 10}, u)
+    assert draft["max_femme"] == 10 and issues == []  # null = « non demandé »

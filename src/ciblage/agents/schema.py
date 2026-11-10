@@ -42,8 +42,10 @@ class Understanding(BaseModel):
     max_femme: int | None = Field(
         None, description="Nombre maximal d'e-mails femme, seulement si la demande le précise"
     )
-    remove_limits: bool = Field(
-        False, description="L'utilisateur demande de supprimer les limites d'envoi"
+    # booléens « optionnels » : le LLM y met parfois null, ce qui faisait REFUSER toute la
+    # réponse par la validation de schéma de Groq (10 % d'échecs mesurés en phase 5)
+    remove_limits: bool | None = Field(
+        None, description="L'utilisateur demande de supprimer les limites d'envoi"
     )
     objective: Literal["visites", "profit"] | None = Field(
         None,
@@ -56,8 +58,8 @@ class Understanding(BaseModel):
         None, description="Segment de clients visé par une question"
     )
     client_id: int | None = Field(None, description="Numéro de client mentionné")
-    about_excluded: bool = Field(
-        False, description="La question porte sur les clients écartés (non contactés) par le plan"
+    about_excluded: bool | None = Field(
+        None, description="La question porte sur les clients écartés (non contactés) par le plan"
     )
     advice_topic: Literal["budget", "cout_homme", "cout_femme"] | None = Field(
         None, description="Sujet d'une demande de conseil : le budget, ou le coût d'un des e-mails"

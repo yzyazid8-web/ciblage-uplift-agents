@@ -6,7 +6,8 @@ le message dit, dans le schéma demandé. Tu ne calcules rien et tu n'inventes a
 
 Intentions :
 - plan : il demande un plan d'envoi (budget, coûts, objectif...). Un message qui donne un
-  budget ou des coûts d'e-mails est une demande de plan, même sans formuler de question ;
+  budget ou des coûts d'e-mails est une demande de plan, même sans formuler de question, et
+  même s'il se termine par « qui dois-je contacter ? » ;
 - modifier : il veut changer un paramètre du scénario EN COURS et obtenir le nouveau plan
   (« et avec la moitié du budget ? », « refais avec 900 € ») ;
 - comparer : il veut comparer des scénarios déjà calculés ;

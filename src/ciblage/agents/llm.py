@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import SecretStr
 
@@ -58,30 +59,60 @@ def models() -> tuple[str, str]:
     )
 
 
-def make_understander() -> Understander:
-    """Extraction structurée (intention + paramètres), avec secours automatique."""
-    main, fallback = models()
-    chain = (
-        _chat(main)
-        .with_structured_output(Understanding)
-        .with_retry(stop_after_attempt=2)
-        .with_fallbacks([_chat(fallback).with_structured_output(Understanding)])
-    )
+class UsageCounter(BaseCallbackHandler):
+    """Compte les appels et les tokens réellement consommés (suivi du quota, évaluation)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.reasoning_tokens = 0
+        self.models: dict[str, int] = {}
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        out = response.llm_output or {}
+        usage = out.get("token_usage") or {}
+        self.calls += 1
+        self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        self.completion_tokens += int(usage.get("completion_tokens") or 0)
+        details = usage.get("completion_tokens_details") or {}
+        self.reasoning_tokens += int(details.get("reasoning_tokens") or 0)
+        name = str(out.get("model_name") or "inconnu")
+        self.models[name] = self.models.get(name, 0) + 1
+
+
+def make_understander(fallback: bool = True, counter: UsageCounter | None = None) -> Understander:
+    """Extraction structurée (intention + paramètres), avec secours automatique.
+
+    `fallback=False` : modèle principal seul (évaluation : on mesure UN modèle, pas un mélange).
+    """
+    main, backup = models()
+    chain: Any = _chat(main).with_structured_output(Understanding).with_retry(stop_after_attempt=2)
+    if fallback:
+        chain = chain.with_fallbacks([_chat(backup).with_structured_output(Understanding)])
+    config = {"callbacks": [counter]} if counter else {}
 
     def understand(messages: Messages) -> Understanding:
-        result = chain.invoke(_to_messages(messages))
+        result = chain.invoke(_to_messages(messages), config=config)
         return result if isinstance(result, Understanding) else Understanding.model_validate(result)
 
     return understand
 
 
-def make_writer() -> Writer:
-    """Rédaction en texte libre, avec secours automatique."""
-    main, fallback = models()
-    chain = _chat(main).with_retry(stop_after_attempt=2).with_fallbacks([_chat(fallback)])
+def make_writer(fallback: bool = True, counter: UsageCounter | None = None) -> Writer:
+    """Rédaction en texte libre, avec secours automatique (désactivable)."""
+    main, backup = models()
+    chain: Any = _chat(main).with_retry(stop_after_attempt=2)
+    if fallback:
+        chain = chain.with_fallbacks([_chat(backup)])
+    config = {"callbacks": [counter]} if counter else {}
 
     def write(messages: Messages) -> str:
-        return str(chain.invoke(_to_messages(messages)).content).strip()
+        return str(chain.invoke(_to_messages(messages), config=config).content).strip()
 
     return write
 

@@ -24,6 +24,7 @@ REQUIRED = {
     "cost_femme": "le coût d'un e-mail femme (en €)",
 }
 MAX_CLARIFY = 3
+MAX_PLAUSIBLE_COST = 2.0  # € par e-mail : au-delà, on soupçonne une erreur d'unité
 MAX_MESSAGE_CHARS = 2_000  # protège le quota : un message plus long n'est pas envoyé au LLM
 EXCLUDED_WORDS = re.compile(
     r"(écart|exclu|non[- ]contact|pas contact|laiss\w* de côté)", re.IGNORECASE
@@ -240,6 +241,19 @@ def fallback(kind: str, facts: dict[str, Any]) -> str:
     return generic_template(facts)
 
 
+def plausibility_issues(draft: dict[str, Any]) -> list[str]:
+    """Controle de vraisemblance deterministe (ne dépend pas du LLM)."""
+    issues = []
+    for key, name in (("cost_homme", "homme"), ("cost_femme", "femme")):
+        cost = draft.get(key)
+        if cost is not None and cost > MAX_PLAUSIBLE_COST:
+            issues.append(
+                f"Le coût de {cost:g} € par e-mail {name} semble élevé : s'agit-il de centimes, ou d'un "
+                "prix pour plusieurs e-mails ? Indique le coût d'UN e-mail en euros."
+            )
+    return issues
+
+
 def _has_campaign_params(understanding: dict[str, Any]) -> bool:
     """Le message contient-il au moins un paramètre de campagne (budget, coût, limite...) ?"""
     keys = (
@@ -252,6 +266,24 @@ def _has_campaign_params(understanding: dict[str, Any]) -> bool:
         "max_femme",
     )
     return any(understanding.get(k) is not None for k in keys)
+
+
+def correct_intent(
+    understanding: dict[str, Any], question: str, has_scenario: bool
+) -> tuple[dict[str, Any], list[str]]:
+    """Règles deterministes qui corrigent des erreurs du LLM observées en test réel."""
+    u, notes = dict(understanding), []
+    if u["intent"] == "hors_sujet" and _has_campaign_params(u):
+        # des paramètres de campagne ont été extraits : le message n'est pas hors sujet
+        u["intent"] = "modifier" if has_scenario else "plan"
+        notes.append(
+            f"superviseur : « hors sujet » corrigé en « {u['intent']} » (paramètres présents)"
+        )
+    if u["intent"] == "donnees" and EXCLUDED_WORDS.search(question or ""):
+        # « qui sont les clients écartés ? » porte sur le PLAN, pas sur le portefeuille
+        u["intent"], u["about_excluded"] = "expliquer", True
+        notes.append("superviseur : question sur les clients écartés -> explication du plan")
+    return u, notes
 
 
 def _scenario(draft: dict[str, Any] | None) -> Scenario:
@@ -275,7 +307,16 @@ def build_graph(deps: Deps, checkpointer: Any = None):
 
     def understand(state: AgentState) -> dict[str, Any]:
         msgs = understand_messages(state["user_input"], _context(state))
-        u = deps.understand(msgs)
+        try:
+            u = deps.understand(msgs)
+        except Exception as err:  # réponse invalide du LLM, quota, réseau : on ne plante pas
+            return {
+                "understanding": {"intent": "echec"},
+                "answer": "Je n'ai pas réussi à analyser ta demande (service de langage indisponible "
+                "ou réponse invalide). Peux-tu reformuler, ou réessayer dans un instant ?",
+                "llm_calls": state.get("llm_calls", 0) + 1,
+                "trace": state.get("trace", []) + [f"compréhension : échec ({type(err).__name__})"],
+            }
         return {
             "understanding": u.model_dump(),
             "llm_calls": state.get("llm_calls", 0) + 1,
@@ -283,23 +324,16 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         }
 
     def supervisor(state: AgentState) -> dict[str, Any]:
-        intent = state.get("pending_intent") or state["understanding"]["intent"]
-        trace = list(state["trace"])
         understanding = dict(state["understanding"])
-        if intent == "hors_sujet" and _has_campaign_params(understanding):
-            # incohérence du LLM (observée en test réel) : des paramètres de campagne ont été
-            # extraits, le message n'est donc pas hors sujet -> règle déterministe
-            intent = "modifier" if state.get("scenario") else "plan"
-            trace.append(
-                f"superviseur : « hors sujet » corrigé en « {intent} » (paramètres présents)"
-            )
-        if intent == "donnees" and EXCLUDED_WORDS.search(state.get("turn_question", "")):
-            # « qui sont les clients écartés ? » porte sur le PLAN, pas sur le portefeuille
-            intent = "expliquer"
-            understanding["about_excluded"] = True
-            trace.append("superviseur : question sur les clients écartés -> explication du plan")
-        understanding["intent"] = intent  # les étapes suivantes lisent l'intention corrigée
+        if state.get("pending_intent"):
+            understanding["intent"] = state["pending_intent"]
+        understanding, notes = correct_intent(
+            understanding, state.get("turn_question", ""), has_scenario=bool(state.get("scenario"))
+        )
+        intent = understanding["intent"]  # les étapes suivantes lisent l'intention corrigée
+        trace = list(state["trace"]) + notes
         routes = {
+            "echec": "end",
             "plan": "assemble",
             "modifier": "assemble",
             "conseil": "assemble",
@@ -332,7 +366,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         if draft.get("objective") == "profit" and draft.get("value_per_visit") is None:
             missing.append("ce que rapporte une visite (en €), pour l'objectif profit")
         if not missing and not issues:
-            issues += _scenario(draft).errors()
+            issues += _scenario(draft).errors() + plausibility_issues(draft)
         problems = (
             ([f"Il me manque : {', '.join(missing)}."] if missing else []) + issues + u.ambiguities
         )
@@ -594,7 +628,16 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     g.add_conditional_edges("start", lambda s: s["route"], ["understand", "too_long"])
     g.add_edge("understand", "supervisor")
     g.add_conditional_edges(
-        "supervisor", lambda s: s["route"], ["assemble", "compare", "data", "refuse", "not_yet"]
+        "supervisor",
+        lambda s: s["route"],
+        {
+            "assemble": "assemble",
+            "compare": "compare",
+            "data": "data",
+            "refuse": "refuse",
+            "not_yet": "not_yet",
+            "end": END,  # la compréhension a échoué : la réponse d'excuse est déjà prête
+        },
     )
     g.add_conditional_edges(
         "assemble",

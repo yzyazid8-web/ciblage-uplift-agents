@@ -1,0 +1,28 @@
+# Le contexte de construction ne contient que ce qui sert à l'image.
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+__marimo__
+.ipynb_checkpoints
+
+# Secrets : JAMAIS dans l'image (la clé se passe au lancement avec -e GROQ_API_KEY=...)
+.env
+.env.*
+
+# Données et artefacts locaux (Hillstrom est téléchargé pendant la construction)
+data
+mlruns
+mlflow.db
+reports
+notebooks
+tests
+docs

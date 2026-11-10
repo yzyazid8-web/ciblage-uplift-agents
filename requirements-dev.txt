@@ -3,6 +3,9 @@
 
 -r requirements.txt
 
+# --- Lecture/écriture Parquet (cache de l'échantillon Criteo, scripts de rapport) ---
+pyarrow==26.0.1
+
 # --- Suivi d'expériences ---
 mlflow==3.18.0
 

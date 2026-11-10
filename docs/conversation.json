@@ -1,0 +1,84 @@
+{
+  "date": "2026-11-10",
+  "tours": [
+    {
+      "message": "J'ai 700 €, l'e-mail homme coûte 0,12 € et l'e-mail femme 0,10 €. Maximise les visites.",
+      "type": "reponse",
+      "reponse": "Avec un budget de 700 € le plan propose d’envoyer 5 261 e‑mails homme et 686 e‑mails femme, pour une dépense de 699,92 € et un budget inutilisé de 0,08 €. Cette combinaison devrait générer 624 visites supplémentaires selon la prédiction, avec un coût moyen de 1,12 € par visite gagnée. Le taux de visite observé est de 12,8 % contre 13,04 % pour le ciblage classique, soit un gain de –0,24 point. L’intervalle de confiance à 95 % du gain s’étend de –0,89 à 0,35 point, contenant 0, donc la différence n’est pas démontrée. Le plan cible les « clients ayant acheté seulement au rayon homme » avec uniquement des e‑mails homme (2 812), les « clients ayant acheté seulement au rayon femme » avec un mix (736 e‑mails homme et 686 e‑mails femme) pour profiter de leurs uplift respectifs, et les « clients aux deux rayons » avec 1 713 e‑mails homme. Ainsi, même si la logique segmentée maximise le potentiel d’« uplift », le résultat mesuré ne montre pas de sur‑performance par rapport au ciblage classique sur ce budget.",
+      "etapes": [
+        "compréhension : plan",
+        "superviseur -> assemble",
+        "assemblage : scénario complet",
+        "calcul du plan",
+        "vérification : conforme",
+        "rédaction : chiffres vérifiés (essai 1)"
+      ],
+      "appels_llm": 2
+    },
+    {
+      "message": "Est-ce que 100 € de plus valent le coup ?",
+      "type": "reponse",
+      "reponse": "Le passage de 700 € à 800 € de budget entraînerait 70,4 visites supplémentaires, soit 0,704 visite par euro de variation. Le prix marginal actuel est de 0,718 visite par euro, légèrement supérieur à la hausse prévue. Le budget de saturation est estimé à 2 221,88 €, donc le nouveau budget reste bien en dessous de ce seuil. Ces 70,4 visites sont prédites par le modèle, ce qui rend l’augmentation de 100 € raisonnable.",
+      "etapes": [
+        "compréhension : conseil",
+        "superviseur -> assemble",
+        "assemblage : scénario complet",
+        "conseil : conseil_budget_delta",
+        "rédaction : chiffres vérifiés (essai 1)"
+      ],
+      "appels_llm": 2
+    },
+    {
+      "message": "Pourquoi le client 12 est-il contacté ou non ?",
+      "type": "reponse",
+      "reponse": "Le système a décidé de ne rien envoyer au client 12. Son meilleur rendement (0,462 visites par euro pour l’e‑mail homme) est inférieur au seuil de rentabilité de 0,718, donc la différence n’est pas démontrée. Il appartient au segment « clients ayant acheté seulement au rayon homme », son dernier achat date de 10 mois et il a dépensé 29,99 € l’an passé. L’uplift indiqué (5,54 points pour l’e‑mail homme et 1,94 points pour l’e‑mail femme) est une prédiction du modèle.",
+      "etapes": [
+        "compréhension : expliquer",
+        "superviseur -> assemble",
+        "assemblage : scénario complet",
+        "explication : explication_client",
+        "rédaction : chiffres vérifiés (essai 1)"
+      ],
+      "appels_llm": 2
+    },
+    {
+      "message": "Qui sont les clients écartés ?",
+      "type": "reponse",
+      "reponse": "Le plan a contacté 5 947 clients, tandis que 13 253 ont été écartés. L’uplift prédit moyen pour les écartés est de 5,67 points pour l’e‑mail homme et de 3,72 points pour l’e‑mail femme, bien en dessous des 10,49 et 5,12 points observés chez les contacts. La part d’uplift négatif ou nul est de 0 % dans les deux groupes, mais les écartés ont un délai moyen depuis le dernier achat de 6,6 mois contre 3,8 mois, et une dépense médiane de 115,26 € contre 311,38 €. Ils représentent 60,0 % de nouveaux clients contre 26,8 % parmi les contacts, et leur répartition segmentaire est majoritairement « femme seulement » (54,8 %) et « homme seulement » (43,7 %). Ces clients sont écartés parce que le rendement estimé (visites gagnées par euro dépensé) est inférieur au seuil de rentabilité de 0,718 visite par euro, ce qui ne justifie pas l’envoi de l’e‑mail.",
+      "etapes": [
+        "compréhension : expliquer",
+        "superviseur -> assemble",
+        "assemblage : scénario complet",
+        "explication : explication_ecartes",
+        "rédaction : chiffres vérifiés (essai 1)"
+      ],
+      "appels_llm": 2
+    },
+    {
+      "message": "Et avec 1 000 € ?",
+      "type": "reponse",
+      "reponse": "Par rapport au scénario précédent (budget de 700 €, 5 947 clients contactés et 624 visites en plus prédites), le nouveau scénario passe à un budget de 1 000 €, 8 598 clients contactés et 827 visites en plus prédites. Le plan consiste à envoyer 7 009 e‑mails homme et 1 589 e‑mails femme pour une dépense de 999,98 € (budget inutilisé : 0,02 €). Cette campagne devrait générer 827 visites supplémentaires selon les prévisions. Le gain mesuré face au ciblage classique est de –0,2 point, avec un intervalle de confiance de –1,05 à 0,45 point, ce qui signifie que la différence n’est pas démontrée. Les « clients ayant acheté seulement au rayon homme » reçoivent uniquement les e‑mails homme (4 015), les « clients ayant acheté seulement au rayon femme » reçoivent à la fois les e‑mails homme (1 169) et femme (1 589) pour profiter de l’uplift observé, et les « clients aux deux rayons » reçoivent les e‑mails homme (1 825). Ainsi, même si la logique de segmentation est cohérente, le plan ne montre pas de performance supérieure de façon statistiquement prouvée par rapport au ciblage classique sur ce budget.",
+      "etapes": [
+        "compréhension : modifier",
+        "superviseur -> assemble",
+        "assemblage : scénario complet",
+        "calcul du plan",
+        "vérification : conforme",
+        "rédaction : chiffres vérifiés (essai 1)"
+      ],
+      "appels_llm": 2
+    },
+    {
+      "message": "Compare les scénarios.",
+      "type": "reponse",
+      "reponse": "Le scénario 1 prévoit un budget de 700 €, contacte 5 947 clients et prévoit 624 visites supplémentaires, avec un coût par visite gagnée de 1,12 €. Le scénario 2 utilise un budget de 1 000 €, contacte 8 598 clients, prévoit 827 visites supplémentaires et un coût par visite de 1,21 €. En termes d’efficacité par euro dépensé, le scénario 1 est le plus performant grâce à son coût par visite le plus bas (1,12 € contre 1,21 €). En revanche, le scénario 2 génère le plus grand nombre de visites supplémentaires (827 contre 624). Le gain mesuré face au ciblage classique n’est pas démontré dans les deux scénarios, car l’intervalle de confiance inclut 0.",
+      "etapes": [
+        "compréhension : comparer",
+        "superviseur -> compare",
+        "comparaison des scénarios",
+        "rédaction : chiffres vérifiés (essai 1)"
+      ],
+      "appels_llm": 2
+    }
+  ]
+}

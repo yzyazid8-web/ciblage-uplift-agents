@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # Qualité : lint + format + typage + tests. Le job Docker (build + smoke test) arrive en phase 6.
+  # 1. Qualité : lint + format + typage + tests (aucune clé ni appel au LLM : faux LLM dans les tests)
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -35,3 +35,40 @@ jobs:
 
       - name: Tests (pytest + couverture)
         run: pytest -q --cov=src --cov-report=term-missing
+
+  # 2. Image Docker : construction + test de démarrage (seulement si la qualité est verte).
+  #    Prouve que l'application se lance en une commande, sans l'héberger.
+  docker:
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construction de l'image
+        run: docker build -t ciblage:ci .
+
+      - name: Tableau de bord marimo (port 8080)
+        run: |
+          docker run -d -p 8080:8080 --name dashboard ciblage:ci
+          for i in $(seq 1 40); do
+            curl -fsS http://localhost:8080 >/dev/null && { echo "Tableau de bord prêt après $((i*3)) s"; break; }
+            sleep 3
+          done
+          curl -fsS http://localhost:8080 >/dev/null || { docker logs dashboard; exit 1; }
+          docker rm -f dashboard
+
+      - name: API (port 8000) - santé et vrai calcul de plan
+        run: |
+          docker run -d -p 8000:8000 --name api ciblage:ci \
+            uvicorn ciblage.serve.api:app --host 0.0.0.0 --port 8000
+          for i in $(seq 1 40); do
+            curl -fsS http://localhost:8000/sante >/dev/null && { echo "API prête après $((i*3)) s"; break; }
+            sleep 3
+          done
+          curl -fsS http://localhost:8000/sante || { docker logs api; exit 1; }
+          echo
+          # sans clé Groq, l'agent est indisponible mais le calcul de plan doit fonctionner
+          curl -fsS -X POST http://localhost:8000/plan -H "Content-Type: application/json" \
+            -d '{"budget": 500, "compare": false}' \
+            | python3 -c "import json,sys; s=json.load(sys.stdin)['summary']; assert s['depense'] <= 500 and s['clients_contactes'] > 0; print('Plan OK :', s['clients_contactes'], 'clients,', round(s['depense'], 2), 'EUR')"
+          docker rm -f api

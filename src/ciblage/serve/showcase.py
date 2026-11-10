@@ -21,6 +21,8 @@ from ciblage.serve.planner import Planner, Scenario
 DOCS = config.ROOT / "docs"
 CONVERSATION_FILE = DOCS / "conversation.json"
 REPO_URL = "https://github.com/yzyazid8-web/ciblage-uplift-agents"
+# application complète déployée sur Azure Container Apps (s'éteint sans visiteur : réveil ~1 min)
+LIVE_URL = "https://ciblage-copilote.politebeach-befb1bc3.francecentral.azurecontainerapps.io"
 BUDGETS = (200.0, 400.0, 700.0, 1000.0, 1500.0)
 CONVERSATION = [
     "J'ai 700 €, l'e-mail homme coûte 0,12 € et l'e-mail femme 0,10 €. Maximise les visites.",
@@ -274,9 +276,10 @@ def build(planner: Planner | None = None, output: Path = DOCS / "index.html") ->
 <p class="lead"><strong>Qui contacter, avec quel e-mail, pour un budget donné ?</strong> Le système estime
 pour chaque client ce que chaque e-mail change <em>vraiment</em> (uplift), optimise l'allocation sous budget,
 vérifie le plan et l'explique, avec des chiffres contrôlés.</p>
-<div class="banner">Démo <strong>pré-calculée</strong> sur une vraie campagne randomisée (Hillstrom, 19 200 clients
-jamais vus par les modèles). L'application complète, avec l'agent en direct, se lance avec Docker :
-<a href="{REPO_URL}">code et instructions sur GitHub</a>.</div>
+<div class="banner">Cette page est une démo <strong>pré-calculée</strong> sur une vraie campagne randomisée
+(Hillstrom, 19 200 clients jamais vus par les modèles).<br><strong>Application complète en direct</strong>, avec l'agent :
+<a href="{LIVE_URL}">démo sur Azure Container Apps</a> (elle s'éteint sans visiteur : la première ouverture peut
+prendre environ une minute). Code et instructions : <a href="{REPO_URL}">GitHub</a>.</div>
 
 <h2>Le plan selon le budget</h2>
 <p>Coûts supposés : e-mail homme 0,12 €, e-mail femme 0,10 €. Les taux de visite sont <strong>mesurés</strong> sur

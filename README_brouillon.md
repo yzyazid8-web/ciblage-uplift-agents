@@ -9,7 +9,9 @@ copier dans README.md. Les chiffres marqués [à compléter] attendent la fin de
 question en français ; le système estime pour chaque client ce que chaque e-mail change *vraiment*
 (uplift), optimise l'allocation sous budget, vérifie le plan et l'explique, chiffres contrôlés.
 
-> Démo pré-calculée : [lien GitHub Pages à ajouter] · Application complète : `docker run` (ci-dessous)
+> **Démo en direct** (Azure Container Apps, réveil ~1 min) : https://ciblage-copilote.politebeach-befb1bc3.francecentral.azurecontainerapps.io
+> **Vitrine** (instantanée, résultats pré-calculés) : https://yzyazid8-web.github.io/ciblage-uplift-agents/
+> En local : `docker run` (ci-dessous)
 
 ![Démo](docs/demo.gif) <!-- GIF à enregistrer -->
 

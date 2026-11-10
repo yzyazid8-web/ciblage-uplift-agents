@@ -49,8 +49,9 @@ def app_guide(planner: Planner) -> dict[str, Any]:
                 "(bootstrap)"
             ),
             "etape_4_agent": (
-                "un agent (LangGraph et un LLM) comprend les demandes en français, lance les calculs "
-                "et rédige les réponses ; chaque chiffre est vérifié avant affichage"
+                "un workflow LangGraph : un LLM comprend la demande, un routeur déterministe lance les "
+                "calculs, un LLM rédige ; pour les questions en plusieurs étapes, un agent analyste "
+                "choisit lui-même ses outils ; chiffres et verdict vérifiés avant affichage"
             ),
             "niveau_de_confiance_pct": 95,
         },
@@ -85,6 +86,8 @@ def app_guide(planner: Planner) -> dict[str, Any]:
                 "calculer un plan à partir d'un budget et des coûts des e-mails",
                 "le recalculer après un changement (« et avec la moitié du budget ? »)",
                 "comparer les scénarios calculés",
+                "mener une analyse en plusieurs étapes (« compare 500, 700 et 1 000 € : lequel est "
+                "le plus rentable ? ») en choisissant lui-même ses outils",
                 "dire si un budget plus élevé vaut le coup, ou à partir de quel coût un e-mail ne sert plus",
                 "expliquer chaque résultat affiché : indicateurs, graphiques, décision d'un client, clients écartés",
                 "décrire le portefeuille de clients",

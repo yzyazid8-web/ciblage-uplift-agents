@@ -3,7 +3,7 @@ BROUILLON préparé à partir des rapports générés (reports/*.md). À REFORMU
 copier dans README.md. Les chiffres marqués [à compléter] attendent la fin de l'évaluation (phase 5).
 -->
 
-# Copilote de ciblage causal multi-agents
+# Copilote de ciblage causal
 
 **Qui contacter, avec quel e-mail, pour un budget donné ?** Un responsable marketing pose la
 question en français ; le système estime pour chaque client ce que chaque e-mail change *vraiment*
@@ -29,13 +29,25 @@ acheté **sans** l'e-mail : le budget est dépensé pour rien. La bonne question
 
 ## Ce que fait le système
 ```
-« J'ai 700 €, l'e-mail homme coûte 0,12 €… »
-  → compréhension (LLM) → superviseur → clarification si ambigu
-  → uplift client par client (S/T/X/DR-learners) → optimisation sous budget (relaxation lagrangienne)
-  → vérification indépendante → explication (LLM) → contrôle de chaque chiffre cité
+Demande simple : « J'ai 700 €, l'e-mail homme coûte 0,12 €… »
+  → compréhension (LLM, sortie structurée) → routeur déterministe → clarification si ambigu
+  → uplift client par client (S-learner, retenu parmi S/T/X/DR) → optimisation sous budget
+    (relaxation lagrangienne) → vérification indépendante → rédaction (LLM)
+  → contrôle des chiffres et du verdict
+
+Analyse en plusieurs étapes : « Compare 500, 700 et 1 000 €, lequel est le plus rentable ? »
+  → agent analyste : le LLM choisit lui-même ses outils (plans, conseils, explications),
+    au plus 5 étapes, outils en lecture seule → même contrôle des chiffres et du verdict
 ```
-Le LLM **comprend et rédige, il ne calcule jamais** : tous les chiffres viennent du code, et chaque
-nombre d'une réponse est vérifié avant affichage.
+Le LLM **comprend, choisit des outils et rédige ; il ne calcule jamais** : tous les chiffres viennent
+du code, et chaque nombre d'une réponse est vérifié avant affichage, ainsi que le verdict (une
+réponse ne peut pas dire « prouvé » quand l'intervalle de confiance contient 0).
+
+**Pourquoi un workflow, plus un seul agent ?** Les demandes courantes suivent un chemin fixé par le
+code : prévisible, testable, 2 appels au LLM par tour. Seules les questions qui demandent plusieurs
+calculs sont confiées à un agent autonome, borné (5 étapes, outils sans effet). Je n'ai pas fait de
+système « multi-agents » : un second LLM critique ferait moins bien que le vérificateur
+déterministe, pour plus de coût et plus de pannes.
 
 ## Résultats (tous générés par script, voir `reports/`)
 **Données** : Hillstrom, vraie campagne e-mail randomisée (64 000 clients) ; Criteo Uplift (14 M de
@@ -44,15 +56,18 @@ lignes) pour l'échelle ; un simulateur à uplift connu pour la vérité terrain
 - **Effet moyen** (phase 1) : e-mail homme +7,7 points de visite, e-mail femme +4,5 (base 10,6 %) ;
   l'effet de l'e-mail femme varie fortement selon ce que le client a déjà acheté.
 - **Uplift** (phase 2, 30 % de test mis de côté avant tout réglage) : à e-mail égal, cibler par uplift
-  rapporte **+1,0 à +1,2 point de visite** de plus que le ciblage classique pour l'e-mail femme
-  (IC 95 % excluant 0) ; **aucun gain** pour l'e-mail homme, dont l'effet est presque uniforme.
-- **Optimisation** (phase 3) : relaxation lagrangienne codée à la main, **écart prouvé ≤ 0,04 %** à
-  l'optimum, **1 M de clients en 7 s**, ~50× plus rapide que la relaxation linéaire HiGHS.
+  rapporte **+1,0 point de visite [+0,4 ; +1,6]** de plus que le ciblage classique pour l'e-mail
+  femme, avec le learner retenu (S-learner ; T-learner +1,2 ; X et DR non significatifs) ;
+  **aucun gain** pour l'e-mail homme, dont l'effet est presque uniforme.
+- **Optimisation** (phase 3) : relaxation lagrangienne codée à la main, **écart prouvé à l'optimum
+  ≤ 0,04 % dès 5 000 clients** (0,13 % à 1 000) ; **1 M de clients en ~6 s** avec le budget seul
+  (~42 s avec une limite d'envois) ; à 64 000 clients, 0,6 s contre 19 s pour la relaxation
+  linéaire HiGHS.
   Sur données simulées (uplift hétérogène), le plan optimisé capte **89-94 % du gain maximal**,
   contre 16-56 % pour le ciblage classique. Sur Hillstrom, il fait jeu égal avec le ciblage classique :
   je l'écris tel quel.
 - **Agent** (phase 5 : 119 messages et 30 conversations générés à partir de scénarios connus, sans
-  annotation ; IC de Wilson à 95 %) :
+  annotation ; IC de Wilson à 95 % ; mesuré avant l'ajout de l'agent analyste) :
   - compréhension : intention reconnue **116/119 (97 %)**, paramètres exacts **82/83**, **aucun
     paramètre inventé (34/34)**, aucune fausse ambiguïté (30/30) ;
   - conversations complètes : **29/30 réussies (97 %)**, scénario final correct 12/12, export
@@ -72,8 +87,8 @@ lignes) pour l'échelle ; un simulateur à uplift connu pour la vérité terrain
 | Qini, AUUC, courbes d'uplift | identiques à scikit-uplift |
 | Valeur de politique par IPW + bootstrap apparié | vraie valeur retrouvée sur le simulateur |
 | Relaxation lagrangienne + borne d'optimalité | ≥ 98 % de l'optimum MILP exact, borne = relaxation linéaire |
-| Agent LangGraph : superviseur, 5 rôles, clarification, export confirmé | tests avec faux LLM + tests réels |
-| Contrôle de fidélité numérique des réponses | a refusé en direct des chiffres inventés |
+| Workflow LangGraph (routeur, clarification, export confirmé) + agent analyste à outils | tests avec faux LLM + tests réels |
+| Contrôle de fidélité des réponses (chiffres et verdict) | cas trouvés par un audit externe : nombres collés à un symbole, points cités en %, gain non démontré présenté comme prouvé |
 | Évaluation automatique de l'agent | IC de Wilson, échecs du modèle comptés, pannes exclues |
 
 ## Lancer le projet

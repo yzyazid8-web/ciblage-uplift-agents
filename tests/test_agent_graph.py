@@ -40,6 +40,10 @@ U = {
     "Explique-moi tous les résultats": Understanding(
         intent="expliquer", ambiguities=["Quel élément de l'écran faut-il interpréter ?"]
     ),
+    "Compare 500, 700 et 1 000 € : lequel est le plus rentable ?": Understanding(
+        intent="plan", budget=500
+    ),  # le LLM n'a retenu qu'un budget : la règle des budgets multiples corrige
+    "analyse libre": Understanding(intent="analyse"),
     "flou": Understanding(
         intent="plan", budget=600, ambiguities=["Le coût de 10 € est-il pour 100 e-mails ?"]
     ),
@@ -51,7 +55,8 @@ def fake_understand(messages):
 
 
 def faithful_writer(messages):
-    facts = json.loads(messages[-1][1].split("\n", 1)[1])
+    dossier = next(c for _, c in messages if c.startswith("DOSSIER DE FAITS"))
+    facts = json.loads(dossier.split("\n", 1)[1])
     if "plan" not in facts:  # conseil, comparaison : réponse sans chiffre (toujours fidèle)
         return "Analyse effectuée."
     p = facts["plan"]
@@ -67,8 +72,8 @@ def planner():
     return Planner()
 
 
-def copilot(planner, writer=faithful_writer, db_path=None, exports_dir=None):
-    deps = Deps(planner=planner, understand=fake_understand, write=writer)
+def copilot(planner, writer=faithful_writer, db_path=None, exports_dir=None, analyze=None):
+    deps = Deps(planner=planner, understand=fake_understand, write=writer, analyze=analyze)
     if exports_dir is not None:
         deps.exports_dir = exports_dir
     return Copilot(deps, db_path)
@@ -433,3 +438,109 @@ def test_null_booleans_are_accepted():
     )
     draft, issues = merge({"budget": 100.0, "max_femme": 10}, u)
     assert draft["max_femme"] == 10 and issues == []  # null = « non demandé »
+
+
+# agent analyste (boucle LLM <-> outils) avec un faux LLM à outils
+def scripted_analyst(messages):
+    """1re décision : calculer trois plans d'un coup ; 2e : répondre avec les chiffres reçus."""
+    tool_results = [m for m in messages if m["role"] == "tool"]
+    if not tool_results:
+        return {
+            "content": "",
+            "tool_calls": [
+                {"id": "a1", "name": "calculer_plans", "args": {"budgets": [500, 700, 1000]}}
+            ],
+        }
+    plans = json.loads(tool_results[-1]["content"])["plans"]
+    text = " ; ".join(
+        f"{p['budget']:.0f} € : {p['visites_en_plus_predites']} visites" for p in plans
+    )
+    return {"content": f"Visites en plus prédites : {text}.", "tool_calls": []}
+
+
+def test_the_analyst_chooses_its_tools_then_answers_with_checked_numbers(planner):
+    c = copilot(planner, analyze=scripted_analyst)
+    c.send("t40", "plan complet")
+    shown = c.state("t40")["scenario"]
+    r = c.send("t40", "Compare 500, 700 et 1 000 € : lequel est le plus rentable ?")
+    assert r.kind == "reponse" and r.text.startswith("Visites en plus prédites")
+    assert any("budgets cités -> analyse" in step for step in r.trace)
+    assert any("calculer_plans" in step for step in r.trace)
+    assert "rédaction : chiffres vérifiés (essai 1)" in r.trace
+    assert r.llm_calls == 3  # compréhension + 2 décisions de l'analyste ; aucune rédaction de plus
+    state = c.state("t40")
+    assert state["facts_kind"] == "analyse"
+    assert len(state["facts"]["resultats_des_outils"]) == 1
+    assert state["scenario"] == shown  # une analyse ne change pas le plan affiché
+
+
+def test_an_analyst_answer_with_invented_numbers_is_rewritten(planner):
+    def inventive(messages):
+        if not any(m["role"] == "tool" for m in messages):
+            return {
+                "content": "",
+                "tool_calls": [{"id": "x", "name": "calculer_plans", "args": {"budgets": [500]}}],
+            }
+        return {"content": "Le plan rapporte 9 999 visites.", "tool_calls": []}
+
+    c = copilot(planner, analyze=inventive)
+    c.send("t41", "plan complet")
+    r = c.send("t41", "analyse libre")
+    assert any("chiffres non vérifiés" in step for step in r.trace)
+    assert "9 999" not in r.text
+
+
+def test_the_analyst_is_stopped_after_the_step_limit(planner):
+    from ciblage.agents.graph import MAX_ANALYST_STEPS
+
+    def endless(messages):
+        return {"content": "", "tool_calls": [{"id": "z", "name": "courbe_budget", "args": {}}]}
+
+    c = copilot(planner, analyze=endless)
+    c.send("t42", "plan complet")
+    r = c.send("t42", "analyse libre")
+    assert r.kind == "reponse"
+    assert any("limite d'étapes atteinte" in step for step in r.trace)
+    tool_steps = [step for step in r.trace if step.startswith("analyste : étape")]
+    assert len(tool_steps) == MAX_ANALYST_STEPS - 1
+
+
+def test_analyst_failure_does_not_break_the_conversation(planner):
+    def broken(messages):
+        raise RuntimeError("quota")
+
+    c = copilot(planner, analyze=broken)
+    c.send("t43", "plan complet")
+    r = c.send("t43", "analyse libre")
+    assert r.kind == "reponse" and any("analyste : échec" in step for step in r.trace)
+
+
+def test_without_an_analyst_the_request_is_answered_clearly(planner):
+    c = copilot(planner)  # pas d'agent à outils configuré
+    r = c.send("t44", "analyse libre")
+    assert r.kind == "reponse" and r.llm_calls == 1
+
+
+def test_a_writer_claiming_an_undemonstrated_gain_is_corrected(planner):
+    """Audit I1 : une injection avait fait écrire « c'est prouvé » malgré un gain non démontré."""
+
+    def boastful(messages):
+        return "Le plan optimisé bat nettement le ciblage classique, c'est prouvé."
+
+    c = copilot(planner, writer=boastful)
+    r = c.send("t45", "plan complet")
+    if c.state("t45")["facts"]["mesure_sur_la_campagne"]["gain_demontre"]:
+        pytest.skip("gain démontré sur ce scénario : rien à corriger")
+    assert "rédaction : verdict contraire aux mesures" in r.trace
+    assert "prouvé" not in r.text and r.text.startswith("Plan recommandé")
+
+
+def test_writer_failure_falls_back_to_the_safe_text(planner):
+    """Vu en test réel : quota du jour atteint pendant la rédaction -> le tour plantait."""
+
+    def out_of_quota(messages):
+        raise RuntimeError("Rate limit reached (tokens per day)")
+
+    r = copilot(planner, writer=out_of_quota).send("t46", "plan complet")
+    assert r.kind == "reponse" and r.text.startswith("Plan recommandé")
+    assert "rédaction : échec (RuntimeError)" in r.trace

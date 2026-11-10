@@ -13,8 +13,9 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from ciblage import config
+from ciblage.agents import tools
 from ciblage.agents.graph import Deps, build_graph
-from ciblage.agents.llm import make_understander, make_writer
+from ciblage.agents.llm import make_analyst, make_understander, make_writer
 from ciblage.agents.tracing import enable_tracing
 from ciblage.serve.planner import Planner
 
@@ -46,7 +47,10 @@ class Copilot:
     ) -> Copilot:
         enable_tracing()  # actif seulement si CIBLAGE_TRACING=1
         deps = Deps(
-            planner=planner or Planner(), understand=make_understander(), write=make_writer()
+            planner=planner or Planner(),
+            understand=make_understander(),
+            write=make_writer(),
+            analyze=make_analyst(tools.schemas()),
         )
         return cls(deps, db_path)
 

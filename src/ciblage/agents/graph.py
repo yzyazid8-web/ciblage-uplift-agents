@@ -1,4 +1,4 @@
-"""Graphe de l'agent (LangGraph) : superviseur, planificateur, clarification, vérification, explication."""
+"""Graphe de l'agent (LangGraph)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from ciblage.agents import faithfulness, prompts
-from ciblage.agents.llm import Understander, Writer, understand_messages
+from ciblage.agents import faithfulness, prompts, tools
+from ciblage.agents.llm import Analyst, Understander, Writer, understand_messages
 from ciblage.agents.schema import AgentState, Understanding
 from ciblage.agents.verify import verify_plan
 from ciblage.serve import advisor, explainer, export, guide
@@ -24,6 +24,15 @@ REQUIRED = {
     "cost_femme": "le coût d'un e-mail femme (en €)",
 }
 MAX_CLARIFY = 3
+MAX_ANALYST_STEPS = 5  # décisions du LLM à outils par tour (quota : environ 1 appel par étape)
+MAX_TOOL_CALLS = 6  # appels d'outils par décision
+# budgets cités : nombres d'au moins 10 dans une question qui parle d'euros ou de budget, sauf
+# les nombres d'e-mails, d'envois, de clients ou de visites, les pourcentages et les numéros
+MONEY_WORDS = re.compile(r"€|\beuros?\b|\bbudgets?\b", re.IGNORECASE)
+NOT_A_BUDGET_AFTER = re.compile(
+    r"\s*(e-?mails?|mails?|envois?|clients?|visites?|%|pts?|points?)", re.IGNORECASE
+)
+NOT_A_BUDGET_BEFORE = re.compile(r"(client|n°|numéro)\s*$", re.IGNORECASE)
 MAX_PLAUSIBLE_COST = 2.0  # € par e-mail : au-delà, on soupçonne une erreur d'unité
 MAX_MESSAGE_CHARS = 2_000  # protège le quota : un message plus long n'est pas envoyé au LLM
 EXCLUDED_WORDS = re.compile(
@@ -66,6 +75,9 @@ class Deps:
     understand: Understander
     write: Writer
     exports_dir: Path = export.EXPORTS_DIR
+    analyze: Analyst | None = (
+        None  # agent à outils ; absent = analyses en plusieurs étapes indisponibles
+    )
 
 
 # outils de mise en forme
@@ -301,13 +313,11 @@ def correct_intent(
     if u["intent"] == "hors_sujet" and _has_campaign_params(u):
         # des paramètres de campagne ont été extraits : le message n'est pas hors sujet
         u["intent"] = "modifier" if has_scenario else "plan"
-        notes.append(
-            f"superviseur : « hors sujet » corrigé en « {u['intent']} » (paramètres présents)"
-        )
+        notes.append(f"routeur : « hors sujet » corrigé en « {u['intent']} » (paramètres présents)")
     if u["intent"] == "donnees" and EXCLUDED_WORDS.search(question or ""):
         # « qui sont les clients écartés ? » porte sur le PLAN, pas sur le portefeuille
         u["intent"], u["about_excluded"] = "expliquer", True
-        notes.append("superviseur : question sur les clients écartés -> explication du plan")
+        notes.append("routeur : question sur les clients écartés -> explication du plan")
     if not u.get("element") and u["intent"] in (
         "expliquer",
         "application",
@@ -317,24 +327,47 @@ def correct_intent(
         element = next((k for k, rx in ELEMENTS.items() if rx.search(question or "")), None)
         if element:
             u["element"] = element
-            notes.append(f"superviseur : élément de l'écran repéré ({element})")
+            notes.append(f"routeur : élément de l'écran repéré ({element})")
     if u.get("element") and u["intent"] in ("expliquer", "application", "hors_sujet", "donnees"):
         # interpréter un résultat affiché demande le plan à l'écran ; sans plan, le guide suffit
         target = "expliquer" if has_scenario else "application"
         if u["intent"] != target:
             u["intent"] = target
-            notes.append(f"superviseur : question sur l'écran -> {target}")
+            notes.append(f"routeur : question sur l'écran -> {target}")
     if u["intent"] in ("expliquer", "application") and u.get("ambiguities"):
         # une explication n'oblige jamais à deviner (sans précision : tout l'écran) ; vu en test
         # réel : « Explique-moi tous les résultats » renvoyait une question inutile
         u["ambiguities"] = []
-        notes.append("superviseur : ambiguïté ignorée (demande d'explication)")
+        notes.append("routeur : ambiguïté ignorée (demande d'explication)")
+    amounts = budget_amounts(question)
+    alternatives = re.search(r"compar|\bou\b|\bvs\b|versus", question or "", re.IGNORECASE)
+    several = len(amounts) >= 3 or (len(amounts) >= 2 and alternatives is not None)
+    if u["intent"] in ("plan", "modifier", "comparer", "conseil") and several:
+        # plusieurs budgets dans un même message : le workflow n'en traite qu'un
+        u["intent"] = "analyse"
+        notes.append(f"routeur : {len(amounts)} budgets cités -> analyse en plusieurs étapes")
     if u["intent"] == "hors_sujet" and APP_WORDS.search(question or ""):
         u["intent"] = "application"
-        notes.append(
-            "superviseur : « hors sujet » corrigé en « application » (question sur l'outil)"
-        )
+        notes.append("routeur : « hors sujet » corrigé en « application » (question sur l'outil)")
     return u, notes
+
+
+def budget_amounts(question: str) -> set[float]:
+    """Budgets cités dans la question (« compare 500, 700 et 1 000 € » -> {500, 700, 1000})."""
+    text = question or ""
+    if not MONEY_WORDS.search(text):
+        return set()
+    out = set()
+    for raw, value, _ in faithfulness.parse_numbers(text):
+        pos = text.find(raw)
+        after, before = text[pos + len(raw) :], text[:pos]
+        if (
+            value >= 10
+            and not NOT_A_BUDGET_AFTER.match(after)
+            and not NOT_A_BUDGET_BEFORE.search(before)
+        ):
+            out.add(value)
+    return out
 
 
 def _scenario(draft: dict[str, Any] | None) -> Scenario:
@@ -354,6 +387,10 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "facts": None,
             "facts_kind": "",
             "turn_question": state.get("user_input", ""),
+            "analyst_messages": [],
+            "analyst_results": [],
+            "analyst_steps": 0,
+            "draft_answer": None,
         }
 
     def understand(state: AgentState) -> dict[str, Any]:
@@ -393,6 +430,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "comparer": "compare",
             "donnees": "data",
             "application": "app_help",
+            "analyse": "analyst" if deps.analyze is not None else "not_yet",
             "hors_sujet": "refuse",
         }
         route = routes.get(intent, "not_yet")
@@ -400,7 +438,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "understanding": understanding,
             "turn_intent": intent,
             "route": route,
-            "trace": trace + [f"superviseur -> {route}"],
+            "trace": trace + [f"routeur -> {route}"],
         }
 
     def assemble(state: AgentState) -> dict[str, Any]:
@@ -545,26 +583,139 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         extra = faithfulness.numbers_in_text(facts) if kind == "application" else []
         msgs = [
             ("system", prompts.PROMPTS[kind]),
-            ("user", f"QUESTION : {state.get('turn_question', '')}"),
+            ("user", prompts.QUESTION.format(question=state.get("turn_question", ""))),
             ("user", "DOSSIER DE FAITS :\n" + json.dumps(facts, ensure_ascii=False)),
         ]
         calls, trace = state.get("llm_calls", 0), list(state["trace"])
+        draft = state.get("draft_answer")  # réponse déjà rédigée par l'analyste : à contrôler
         for attempt in range(2):
-            text = deps.write(msgs)
-            calls += 1
+            if attempt == 0 and draft:
+                text = draft
+            else:
+                calls += 1
+                try:
+                    text = deps.write(msgs)
+                except Exception as err:  # quota du jour atteint, réseau : texte standard calculé
+                    trace.append(f"rédaction : échec ({type(err).__name__})")
+                    break
             if not text.strip():
                 trace.append("rédaction : réponse vide")
                 continue
             report = faithfulness.check(text, facts, extra_allowed=extra)
             if report.ok:
                 trace.append(f"rédaction : chiffres vérifiés (essai {attempt + 1})")
-                return {"answer": MARKDOWN.sub("", text), "llm_calls": calls, "trace": trace}
-            trace.append(f"rédaction : chiffres non vérifiés {report.unsupported}")
-            msgs = msgs + [
-                ("user", prompts.REGENERATE.format(numbers=", ".join(report.unsupported)))
-            ]
+                return {
+                    "answer": MARKDOWN.sub("", text),
+                    "llm_calls": calls,
+                    "trace": trace,
+                    "draft_answer": None,
+                }
+            fixes = []
+            if report.unsupported:
+                trace.append(f"rédaction : chiffres non vérifiés {report.unsupported}")
+                fixes.append(prompts.REGENERATE.format(numbers=", ".join(report.unsupported)))
+            if report.verdict:
+                trace.append("rédaction : verdict contraire aux mesures")
+                fixes.append(
+                    prompts.REGENERATE_VERDICT.format(sentences=" / ".join(report.verdict))
+                )
+            msgs = msgs + [("assistant", text), ("user", "\n\n".join(fixes))]
         trace.append("rédaction : texte standard (repli sûr)")
-        return {"answer": fallback(kind, facts), "llm_calls": calls, "trace": trace}
+        return {
+            "answer": fallback(kind, facts),
+            "llm_calls": calls,
+            "trace": trace,
+            "draft_answer": None,
+        }
+
+    def analyst(state: AgentState) -> dict[str, Any]:
+        """Agent à outils : le LLM décide lui-même quels outils appeler, ou rédige la réponse."""
+        assert deps.analyze is not None
+        messages = list(state.get("analyst_messages") or [])
+        if not messages:
+            scenario = state.get("scenario")
+            messages = [
+                {
+                    "role": "system",
+                    "content": prompts.ANALYST.replace("{max_steps}", str(MAX_ANALYST_STEPS)),
+                },
+                {
+                    "role": "system",
+                    "content": "Scénario affiché : "
+                    + (json.dumps(scenario, ensure_ascii=False) if scenario else "aucun"),
+                },
+                {
+                    "role": "user",
+                    "content": prompts.QUESTION.format(question=state.get("turn_question", "")),
+                },
+            ]
+        steps, calls = state.get("analyst_steps", 0) + 1, state.get("llm_calls", 0) + 1
+        try:
+            reply = deps.analyze(messages)
+        except Exception as err:  # quota, réseau, appel d'outil mal formé : réponse sans l'analyste
+            return {
+                "llm_calls": calls,
+                "analyst_steps": steps,
+                "route": "write",
+                "trace": state["trace"] + [f"analyste : échec ({type(err).__name__})"],
+                **_analysis_facts(state),
+            }
+        tool_calls = reply["tool_calls"][:MAX_TOOL_CALLS]
+        if tool_calls and steps < MAX_ANALYST_STEPS:
+            messages.append(
+                {"role": "assistant", "content": reply["content"], "tool_calls": tool_calls}
+            )
+            shown = ", ".join(tools.describe_call(c["name"], c["args"]) for c in tool_calls)
+            return {
+                "analyst_messages": messages,
+                "analyst_steps": steps,
+                "llm_calls": calls,
+                "route": "run_tools",
+                "trace": state["trace"] + [f"analyste : étape {steps} -> {shown}"],
+            }
+        # réponse finale (ou plus d'étapes disponibles) : elle passe par les contrôles habituels
+        note = "réponse proposée" if not tool_calls else "limite d'étapes atteinte"
+        return {
+            "analyst_messages": messages,
+            "analyst_steps": steps,
+            "llm_calls": calls,
+            "draft_answer": reply["content"] if not tool_calls else None,
+            "route": "write",
+            "trace": state["trace"] + [f"analyste : {note}"],
+            **_analysis_facts(state),
+        }
+
+    def run_tools(state: AgentState) -> dict[str, Any]:
+        """Exécute les outils demandés par l'analyste ; les résultats lui sont renvoyés."""
+        messages = list(state["analyst_messages"])
+        results = list(state.get("analyst_results") or [])
+        done = []
+        for call in messages[-1]["tool_calls"]:
+            result = tools.run_tool(deps.planner, state.get("scenario"), call["name"], call["args"])
+            results.append({"outil": call["name"], "arguments": call["args"], "resultat": result})
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                }
+            )
+            done.append(f"{call['name']} {'(erreur)' if 'erreur' in result else 'ok'}")
+        return {
+            "analyst_messages": messages,
+            "analyst_results": results,
+            "trace": state["trace"] + ["outils : " + ", ".join(done)],
+        }
+
+    def _analysis_facts(state: AgentState) -> dict[str, Any]:
+        """Dossier de faits de l'analyse : scénario affiché et résultats de tous les outils."""
+        return {
+            "facts": {
+                "scenario_affiche": state.get("scenario"),
+                "resultats_des_outils": state.get("analyst_results") or [],
+            },
+            "facts_kind": "analyse",
+        }
 
     def explain_decision(state: AgentState) -> dict[str, Any]:
         sc = _scenario(state["draft"])
@@ -686,6 +837,8 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         "explain_decision": explain_decision,
         "data": data,
         "app_help": app_help,
+        "analyst": analyst,
+        "run_tools": run_tools,
         "confirm_export": confirm_export,
         "too_long": too_long,
         "write": write,
@@ -705,6 +858,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "compare": "compare",
             "data": "data",
             "app_help": "app_help",
+            "analyst": "analyst",
             "refuse": "refuse",
             "not_yet": "not_yet",
             "end": END,  # la compréhension a échoué : la réponse d'excuse est déjà prête
@@ -720,6 +874,8 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     )
     g.add_edge("data", "write")
     g.add_edge("app_help", "write")
+    g.add_conditional_edges("analyst", lambda s: s["route"], ["run_tools", "write"])
+    g.add_edge("run_tools", "analyst")
     g.add_conditional_edges(
         "clarify", lambda s: s["route"], {"understand": "understand", "end": END}
     )

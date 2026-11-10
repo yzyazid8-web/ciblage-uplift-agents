@@ -7,16 +7,19 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import SecretStr
 
 from ciblage import config
 from ciblage.agents import prompts
 from ciblage.agents.schema import Understanding
 
-Messages = list[tuple[str, str]]  # [(role, contenu)], rôle = "system" | "user"
+Messages = list[tuple[str, str]]  # [(role, contenu)], rôle = "system" | "user" | "assistant"
 Understander = Callable[[Messages], Understanding]
 Writer = Callable[[Messages], str]
+# agent à outils : historique de l'analyse (dicts sérialisables) -> {"content", "tool_calls"}
+ChatMessages = list[dict[str, Any]]
+Analyst = Callable[[ChatMessages], dict[str, Any]]
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_FALLBACK = "openai/gpt-oss-20b"
@@ -39,7 +42,8 @@ def _load_env_file() -> None:
 
 
 def _to_messages(messages: Messages) -> list[BaseMessage]:
-    return [SystemMessage(c) if r == "system" else HumanMessage(c) for r, c in messages]
+    roles = {"system": SystemMessage, "assistant": AIMessage}
+    return [roles.get(r, HumanMessage)(c) for r, c in messages]
 
 
 def _chat(model: str) -> Any:
@@ -115,6 +119,42 @@ def make_writer(fallback: bool = True, counter: UsageCounter | None = None) -> W
         return str(chain.invoke(_to_messages(messages), config=config).content).strip()
 
     return write
+
+
+def _to_chat_messages(messages: ChatMessages) -> list[BaseMessage]:
+    out: list[BaseMessage] = []
+    for m in messages:
+        role, content = m["role"], m.get("content") or ""
+        if role == "system":
+            out.append(SystemMessage(content))
+        elif role == "user":
+            out.append(HumanMessage(content))
+        elif role == "assistant":
+            out.append(AIMessage(content, tool_calls=m.get("tool_calls") or []))
+        else:  # résultat d'outil
+            out.append(ToolMessage(content, tool_call_id=m["tool_call_id"]))
+    return out
+
+
+def make_analyst(
+    tool_schemas: list[dict[str, Any]], fallback: bool = True, counter: UsageCounter | None = None
+) -> Analyst:
+    """LLM qui choisit lui-même ses outils (function calling), avec secours automatique."""
+    main, backup = models()
+    chain: Any = _chat(main).bind_tools(tool_schemas).with_retry(stop_after_attempt=2)
+    if fallback:
+        chain = chain.with_fallbacks([_chat(backup).bind_tools(tool_schemas)])
+    config = {"callbacks": [counter]} if counter else {}
+
+    def analyze(messages: ChatMessages) -> dict[str, Any]:
+        reply = chain.invoke(_to_chat_messages(messages), config=config)
+        calls = [
+            {"id": c.get("id") or f"appel-{k}", "name": c["name"], "args": c.get("args") or {}}
+            for k, c in enumerate(getattr(reply, "tool_calls", None) or [])
+        ]
+        return {"content": str(reply.content or "").strip(), "tool_calls": calls}
+
+    return analyze
 
 
 def understand_messages(user_text: str, context: str) -> Messages:

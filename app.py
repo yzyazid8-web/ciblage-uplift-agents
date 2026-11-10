@@ -127,6 +127,7 @@ def _(
                 "J'ai 700 €, l'e-mail homme coûte 0,12 € et l'e-mail femme 0,10 €.",
                 "Et avec 1 000 € ?",
                 "Est-ce que 100 € de plus valent le coup ?",
+                "Compare 500, 700 et 1 000 € : lequel est le plus rentable ?",
                 "Interprète le graphique 2.",
                 "Explique-moi les indicateurs.",
                 "Que fait cette application ?",
@@ -400,6 +401,11 @@ def _(mo):
                 - Il peut **interpréter chaque résultat de l'écran** (« Interprète le graphique 2 »,
                   « Explique-moi les indicateurs ») à partir des valeurs affichées, et répondre aux
                   questions sur l'application elle-même (« Que fait cette application ? »).
+                - Pour une question qui demande **plusieurs calculs** (« compare 500, 700 et
+                  1 000 € »), un **agent analyste** choisit lui-même ses outils (au plus 5 étapes,
+                  outils sans effet) ; ses calculs ne changent pas le plan affiché.
+                - Une réponse ne peut pas dire « prouvé » quand le gain n'est pas démontré : le
+                  verdict est contrôlé, comme les chiffres.
                 - L'export du fichier de campagne n'est fait qu'après ta **confirmation** explicite.
                 - Les étapes (› …) s'affichent en direct au-dessus de chaque réponse.
                 """

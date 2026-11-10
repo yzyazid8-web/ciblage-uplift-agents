@@ -16,6 +16,7 @@ Intent = Literal[
     "donnees",  # question sur le portefeuille de clients
     "exporter",  # produire le fichier de campagne (action à valider)
     "application",  # question sur l'outil lui-même : but, écran, méthode, données, agent
+    "analyse",  # question qui demande plusieurs calculs : l'agent analyste choisit ses outils
     "hors_sujet",
 ]
 Element = Literal["indicateurs", "graphique_taux_de_visite", "graphique_segments"]
@@ -100,6 +101,11 @@ class AgentState(TypedDict, total=False):
     )  # dossier de faits du tour (seule source de chiffres de la réponse)
     facts_kind: str  # type de réponse à rédiger (plan, conseil_..., comparaison)
     answer: str  # réponse finale du tour
-    route: str  # étape choisie par le superviseur
+    route: str  # étape choisie par le routeur
     trace: list[str]  # étapes parcourues PENDANT CE TOUR (remis à zéro à chaque message)
     llm_calls: int  # appels au LLM pendant ce tour (suivi du quota)
+    # agent analyste (boucle LLM <-> outils, remise à zéro à chaque tour)
+    analyst_messages: list[dict[str, Any]]  # échanges avec le LLM à outils (sérialisables)
+    analyst_results: list[dict[str, Any]]  # appels d'outils et leurs résultats (dossier de faits)
+    analyst_steps: int  # nombre de décisions du LLM à outils pendant ce tour
+    draft_answer: str | None  # réponse finale proposée par l'analyste, à contrôler

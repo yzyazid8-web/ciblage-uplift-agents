@@ -272,7 +272,7 @@ def build(planner: Planner | None = None, output: Path = DOCS / "index.html") ->
 <style>{CSS}</style>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script></head>
 <body><main>
-<h1>Copilote de ciblage causal multi-agents</h1>
+<h1>Copilote de ciblage causal</h1>
 <p class="lead"><strong>Qui contacter, avec quel e-mail, pour un budget donné ?</strong> Le système estime
 pour chaque client ce que chaque e-mail change <em>vraiment</em> (uplift), optimise l'allocation sous budget,
 vérifie le plan et l'explique, avec des chiffres contrôlés.</p>

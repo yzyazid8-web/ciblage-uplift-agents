@@ -76,3 +76,20 @@ def test_wilson_interval():
     assert 0.78 < lo < 0.80 and 0.95 < hi < 0.97
     assert wilson(0, 10)[0] == 0.0 and wilson(10, 10)[1] == 1.0
     assert wilson(0, 0) != wilson(0, 0)  # NaN quand aucun cas
+
+
+def test_infrastructure_failures_are_never_counted_as_results():
+    """Incident réel : réseau coupé pendant l'évaluation -> 116 erreurs mises en cache et des
+    conversations « échouées » qui n'étaient que des pannes."""
+    from ciblage.eval.run import is_valid, trace_infra_failure
+
+    ok = {"version": "v", "tours": [{"trace": ["compréhension : plan"]}]}
+    down = {"version": "v", "tours": [{"trace": ["compréhension : échec (APIConnectionError)"]}]}
+    model_failure = {
+        "version": "v",
+        "tours": [{"trace": ["compréhension : échec (ValidationError)"]}],
+    }
+    assert is_valid(ok, "v") and not is_valid(ok, "autre")
+    assert trace_infra_failure(down) and not is_valid(down, "v")
+    assert not trace_infra_failure(model_failure)  # un échec du modèle reste compté
+    assert not is_valid({"version": "v", "erreur": "APIConnectionError"}, "v")

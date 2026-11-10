@@ -15,7 +15,7 @@ from typing import Any
 import pandas as pd
 
 from ciblage import config
-from ciblage.eval.run import EVAL_DIR, _load, _version
+from ciblage.eval.run import EVAL_DIR, _load, _version, is_valid
 from ciblage.reporting import md_table
 
 OUTPUT = config.REPORTS_DIR / "phase5_eval_agent.md"
@@ -243,8 +243,9 @@ def level2_section(rows: list[dict[str, Any]]) -> str:
 
 def write_report() -> Path:
     version = _version()
-    l1 = [r for r in _load(EVAL_DIR / "niveau1.jsonl").values() if r.get("version") == version]
-    l2 = [r for r in _load(EVAL_DIR / "niveau2.jsonl").values() if r.get("version") == version]
+    # seuls les résultats valides comptent (pas d'erreur ni de panne d'infrastructure)
+    l1 = [r for r in _load(EVAL_DIR / "niveau1.jsonl").values() if is_valid(r, version)]
+    l2 = [r for r in _load(EVAL_DIR / "niveau2.jsonl").values() if is_valid(r, version)]
     v1_path = EVAL_DIR / "niveau1_v1.jsonl"
     v1 = _as_failures(list(_load(v1_path).values())) if v1_path.exists() else []
     models = sorted({r.get("modele", "?") for r in l1 + l2})

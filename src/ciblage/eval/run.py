@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import tempfile
 import time
 from collections import deque
@@ -112,6 +113,31 @@ def _is_infrastructure(err: BaseException) -> bool:
     return any(k in text for k in keys)
 
 
+MAX_CONSECUTIVE_INFRA = 3  # au-delà : réseau coupé ou service en panne -> on s'arrête
+INFRA_IN_TRACE = re.compile(r"compréhension : échec \((\w+)\)")
+
+
+def is_valid(row: dict[str, Any] | None, version: str) -> bool:
+    """Résultat utilisable : bonne version, et pas contaminé par une panne d'infrastructure."""
+    if not row or row.get("version") != version or "erreur" in row:
+        return False
+    return not trace_infra_failure(row)
+
+
+def trace_infra_failure(row: dict[str, Any]) -> bool:
+    """Une conversation dont un tour a échoué pour cause d'infrastructure ne mesure rien.
+
+    L'agent transforme volontairement une panne en message d'excuse (il ne doit pas planter) :
+    l'évaluation doit donc lire la trace pour ne pas compter cette panne comme un échec de l'agent.
+    """
+    for turn in row.get("tours", []):
+        for step in turn.get("trace", []):
+            m = INFRA_IN_TRACE.search(step)
+            if m and _is_infrastructure(RuntimeError(m.group(1))):
+                return True
+    return False
+
+
 def _equal(a: Any, b: Any) -> bool:
     if isinstance(a, int | float) and isinstance(b, int | float) and not isinstance(a, bool):
         return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
@@ -160,7 +186,8 @@ def run_understanding(max_cases: int | None = None, pause: float = 0.0) -> int:
     throttle = Throttle(counter)
     path = EVAL_DIR / "niveau1.jsonl"
     done, version, model = _load(path), _version(), models()[0]
-    todo = [c for c in understanding_cases() if done.get(c.id, {}).get("version") != version]
+    todo = [c for c in understanding_cases() if not is_valid(done.get(c.id), version)]
+    consecutive_infra = 0
     for case in todo[:max_cases]:
         throttle.wait(1_500)
         context = "Scénario en cours : " + (
@@ -175,12 +202,15 @@ def run_understanding(max_cases: int | None = None, pause: float = 0.0) -> int:
                     f"Quota journalier atteint : {len(todo) - todo.index(case)} cas restants, relancer demain."
                 )
                 return 1
-            if _is_infrastructure(err):  # quota par minute, réseau : exclu (pas la faute du modèle)
-                _append(
-                    path,
-                    {"id": case.id, "version": version, "modele": model, "erreur": repr(err)[:300]},
-                )
-                continue
+            if _is_infrastructure(err):  # quota par minute, réseau : pas la faute du modèle
+                consecutive_infra += 1
+                if consecutive_infra >= MAX_CONSECUTIVE_INFRA:
+                    print(
+                        f"Service injoignable ({type(err).__name__}) : arrêt, relancer plus tard."
+                    )
+                    return 1
+                time.sleep(10)
+                continue  # rien n'est enregistré : le cas sera refait à la prochaine exécution
             # réponse invalide du modèle : c'est un ÉCHEC du modèle, compté comme tel
             failure = {"intent": "echec", "ambiguities": [], "erreur_modele": repr(err)[:300]}
             _append(
@@ -199,6 +229,7 @@ def run_understanding(max_cases: int | None = None, pause: float = 0.0) -> int:
                 },
             )
             continue
+        consecutive_infra = 0
         throttle.record()
         row = {
             "id": case.id,
@@ -235,7 +266,7 @@ def run_conversations(max_cases: int | None = None) -> int:
     throttle = Throttle(counter)
     path = EVAL_DIR / "niveau2.jsonl"
     done, version, model = _load(path), _version(), models()[0]
-    todo = [c for c in conversation_cases() if done.get(c.id, {}).get("version") != version]
+    todo = [c for c in conversation_cases() if not is_valid(done.get(c.id), version)]
     for case in todo[:max_cases]:
         thread = f"{case.id}-{version}"
         if case.setup:
@@ -268,6 +299,11 @@ def run_conversations(max_cases: int | None = None) -> int:
                 {"id": case.id, "version": version, "modele": model, "erreur": repr(err)[:300]},
             )
             continue
+        if trace_infra_failure({"tours": turns}):
+            print(
+                f"Panne d'infrastructure pendant {case.id} (voir la trace) : arrêt, relancer plus tard."
+            )
+            return 1
         state = copilot.state(thread)
         row = {
             "id": case.id,

@@ -15,6 +15,10 @@ select = ["E", "F", "I", "UP", "B"]
 # B018 : les sorties de cellules marimo (dernière expression) sont intentionnelles.
 ignore = ["E501", "B018"]
 
+[tool.ruff.lint.isort]
+# déclaré explicitement : le classement des imports ne dépend plus de l'environnement
+known-first-party = ["ciblage"]
+
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"

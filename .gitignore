@@ -15,7 +15,8 @@ env/
 .env
 
 # --- Données brutes (re-téléchargées par script, jamais versionnées) ---
-data/
+# « /data/ » et non « data/ » : sinon le paquet src/ciblage/data/ serait ignoré lui aussi
+/data/
 
 # --- MLflow / artefacts d'expériences ---
 mlruns/

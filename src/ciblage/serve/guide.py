@@ -121,3 +121,45 @@ def app_guide(planner: Planner) -> dict[str, Any]:
             ),
         },
     }
+
+
+def causal_guide(planner: Planner) -> dict[str, Any]:
+    """Fondement causal des résultats, et robustesse hors essai randomisé.
+
+    Chiffres figés depuis `reports/phase1b_observationnel.md` (générés par
+    `python -m ciblage.causal.observational`), comme les autres résultats du guide.
+    """
+    return {
+        "question_traitee": "les effets mesurés sont-ils causaux, et que valent-ils sans A/B test",
+        "pourquoi_causal": (
+            "les données viennent d'un essai randomisé (Hillstrom) : chaque client a reçu au hasard "
+            "l'e-mail homme, l'e-mail femme ou rien. Le tirage au sort rend les groupes comparables, "
+            "donc la différence de visite mesure l'EFFET de l'e-mail, pas une simple corrélation"
+        ),
+        "effet_vrai_essai_randomise_points": 7.7,  # e-mail homme sur la visite, mesuré sur Hillstrom
+        "nuance_uplift_individuel": (
+            "l'effet d'un client précis est ESTIMÉ, jamais observé ; seul l'effet moyen est garanti "
+            "par la randomisation et la pondération inverse (IPW)"
+        ),
+        "sans_essai_randomise": {
+            "probleme": (
+                "sur des données observationnelles (où l'on a déjà ciblé les « bons » clients), la "
+                "simple différence de moyennes est biaisée"
+            ),
+            "demonstration": (
+                "en cassant volontairement la randomisation de Hillstrom (biais connu), puis en "
+                "corrigeant, on obtient :"
+            ),
+            "sans_correction_points": 10.4,  # différence naïve, biaisée vers le haut
+            "apres_correction_doublement_robuste_points": 7.8,  # AIPW : retrouve la vérité
+            "si_un_facteur_cle_reste_non_mesure_points": 9.0,  # AIPW sans le confondant : biais revient
+            "lecon": (
+                "une méthode doublement robuste (score de propension + modèle de réponse) corrige le "
+                "biais ; mais aucune méthode ne corrige un facteur qu'elle ne mesure pas"
+            ),
+        },
+        "honnetete": [
+            "les coûts des e-mails sont des hypothèses, absents des données",
+            "le choix ENTRE les deux e-mails n'est pas validé par les données",
+        ],
+    }

@@ -54,6 +54,11 @@ APP_WORDS = re.compile(
     r"|comment (ça|ca) marche|comment l'utiliser)",
     re.IGNORECASE,
 )
+CAUSAL_WORDS = re.compile(
+    r"causal\w*|corr[ée]lation\w*|a/?b[- ]?test|randomis\w*|confond\w*|confusion|observationnel\w*"
+    r"|sans (?:essai|a/?b|test)",
+    re.IGNORECASE,
+)
 MARKDOWN = re.compile(r"\*\*|__")  # gras markdown, retiré malgré la consigne si le LLM en met
 NEXT_STEP = {"conseil": "advise", "expliquer": "explain_decision", "exporter": "confirm_export"}
 
@@ -313,6 +318,7 @@ SOURCES = {
     "explication_politiques": "taux de visite mesurés des politiques (IC 95 %)",
     "explication_resultats": "résultats du plan affiché",
     "donnees": "portrait du portefeuille (données de la campagne)",
+    "causalite": "inférence causale (essai randomisé) et analyse de robustesse (observationnel)",
 }
 
 
@@ -444,6 +450,11 @@ def correct_intent(
     if u["intent"] == "hors_sujet" and APP_WORDS.search(question or ""):
         u["intent"] = "application"
         notes.append("routeur : « hors sujet » corrigé en « application » (question sur l'outil)")
+    if u["intent"] in ("hors_sujet", "application", "expliquer", "donnees") and CAUSAL_WORDS.search(
+        question or ""
+    ):
+        u["intent"] = "causalite"
+        notes.append("routeur : question sur la causalité -> causalite")
     return u, notes
 
 
@@ -527,6 +538,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "comparer": "compare",
             "donnees": "data",
             "application": "app_help",
+            "causalite": "causal_help",
             "analyse": "analyst" if deps.analyze is not None else "not_yet",
             "hors_sujet": "refuse",
         }
@@ -907,6 +919,14 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "trace": state["trace"] + ["aide : guide de l'application"],
         }
 
+    def causal_help(state: AgentState) -> dict[str, Any]:
+        """Nature causale des résultats (et robustesse sans A/B test) : guide causal pré-calculé."""
+        return {
+            "facts": guide.causal_guide(deps.planner),
+            "facts_kind": "causalite",
+            "trace": state["trace"] + ["causalité : fondement de l'inférence"],
+        }
+
     def confirm_export(state: AgentState) -> dict[str, Any]:
         """Seule action à effet réel : on montre ce qui sera écrit et on attend un oui explicite."""
         sc = _scenario(state["draft"])
@@ -968,6 +988,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         "explain_decision": explain_decision,
         "data": data,
         "app_help": app_help,
+        "causal_help": causal_help,
         "analyst": analyst,
         "run_tools": run_tools,
         "confirm_export": confirm_export,
@@ -989,6 +1010,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "compare": "compare",
             "data": "data",
             "app_help": "app_help",
+            "causal_help": "causal_help",
             "analyst": "analyst",
             "refuse": "refuse",
             "not_yet": "not_yet",
@@ -1005,6 +1027,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     )
     g.add_edge("data", "write")
     g.add_edge("app_help", "write")
+    g.add_edge("causal_help", "write")
     g.add_conditional_edges(
         "analyst", lambda s: s["route"], {"run_tools": "run_tools", "write": "write", "end": END}
     )

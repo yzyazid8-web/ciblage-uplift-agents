@@ -17,6 +17,7 @@ Intent = Literal[
     "exporter",  # produire le fichier de campagne (action à valider)
     "application",  # question sur l'outil lui-même : but, écran, méthode, données, agent
     "analyse",  # question qui demande plusieurs calculs : l'agent analyste choisit ses outils
+    "causalite",  # les effets sont-ils causaux ? et sans A/B test ? (robustesse observationnelle)
     "hors_sujet",
 ]
 Element = Literal["indicateurs", "graphique_taux_de_visite", "graphique_segments"]

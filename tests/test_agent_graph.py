@@ -44,6 +44,7 @@ U = {
         intent="plan", budget=500
     ),  # le LLM n'a retenu qu'un budget : la règle des budgets multiples corrige
     "analyse libre": Understanding(intent="analyse"),
+    "Est-ce que c'est causal ?": Understanding(intent="causalite"),
     "Avec 1 000 €, limite à 3 000 envois, l'e-mail homme 0,12 € et l'e-mail femme 0,10 €.": (
         Understanding(intent="plan", budget=1000, cost_homme=0.12, cost_femme=0.10)
     ),  # vu en test réel (audit I4) : la limite était ignorée sans question
@@ -646,3 +647,33 @@ def test_provenance_lists_the_analyst_tools():
     assert provenance("analyse", facts) == "Sources : outils — calculer plans, comparer politiques."
     assert provenance("comparaison", {}).startswith("Source :")
     assert provenance("application", {}) == ""
+
+
+def test_causal_questions_are_grounded_in_randomisation(planner):
+    """L'agent traite la causalité : essai randomisé + robustesse sans A/B test (module observationnel)."""
+    c = copilot(planner)
+    r = c.send("t60", "Est-ce que c'est causal ?")
+    assert r.kind == "reponse"
+    assert c.state("t60")["facts_kind"] == "causalite"
+    facts = c.state("t60")["facts"]
+    assert "pourquoi_causal" in facts and "sans_essai_randomise" in facts
+    assert "\nSource :" in r.text
+
+
+def test_causal_keywords_reroute_a_misrouted_question():
+    from ciblage.agents.graph import correct_intent
+
+    u, notes = correct_intent({"intent": "hors_sujet"}, "et sans A/B test, c'est fiable ?", False)
+    assert u["intent"] == "causalite"
+    assert any("causalité" in n for n in notes)
+
+
+def test_causal_guide_exposes_grounding_and_robustness(planner):
+    from ciblage.serve.guide import causal_guide
+
+    g = causal_guide(planner)
+    assert "randomisé" in g["pourquoi_causal"]
+    assert isinstance(g["effet_vrai_essai_randomise_points"], float)
+    robust = g["sans_essai_randomise"]
+    assert isinstance(robust["apres_correction_doublement_robuste_points"], float)
+    assert isinstance(robust["sans_correction_points"], float)

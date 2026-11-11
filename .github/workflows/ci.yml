@@ -34,7 +34,9 @@ jobs:
         run: mypy src
 
       - name: Tests (pytest + couverture)
-        run: pytest -q --cov=src --cov-report=term-missing
+        # seuil : la couverture mesurée est de 77 % (les appels réels au LLM et la vitrine ne
+        # sont pas testés en CI, faute de clé) ; une baisse notable fait échouer la CI
+        run: pytest -q --cov=src --cov-report=term-missing --cov-fail-under=75
 
   # 2. Image Docker : construction + test de démarrage (seulement si la qualité est verte).
   #    Prouve que l'application se lance en une commande, sans l'héberger.

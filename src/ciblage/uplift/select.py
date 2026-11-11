@@ -29,6 +29,7 @@ from xgboost import XGBClassifier
 from ciblage import config
 from ciblage.data import criteo, hillstrom
 from ciblage.data import simulate as sim
+from ciblage.reporting import md_table
 from ciblage.uplift import calibration, metrics, policy, tuning
 from ciblage.uplift.learners import DEFAULT_PARAMS, LEARNERS, BaseUplift
 
@@ -93,13 +94,6 @@ def _log_mlflow(run_name: str, params: dict[str, Any], values: dict[str, float])
 
 
 # mise en forme
-def _md(df: pd.DataFrame) -> str:
-    cols = list(df.columns)
-    lines = ["| " + " | ".join(map(str, cols)) + " |", "|" + "---|" * len(cols)]
-    lines += ["| " + " | ".join(str(v) for v in row) + " |" for row in df.itertuples(index=False)]
-    return "\n".join(lines)
-
-
 def _n(v: int) -> str:
     return f"{v:,}".replace(",", "\u202f")  # espace fine insécable
 
@@ -167,7 +161,8 @@ def bench_simulator(n: int = 40_000, seed: int = config.SEED) -> str:
     return (
         f"## 1. Simulateur ({_n(n)} clients, uplift vrai connu)\n\n"
         + "PEHE = erreur quadratique moyenne entre uplift prédit et uplift vrai (plus bas = mieux). "
-        "Prédictions hors échantillon (validation croisée à 5 plis).\n\n" + _md(pd.DataFrame(rows))
+        "Prédictions hors échantillon (validation croisée à 5 plis).\n\n"
+        + md_table(pd.DataFrame(rows))
     )
 
 
@@ -195,7 +190,7 @@ def _policy_table(cmp: dict[str, dict[str, float]], unit: str, baseline: str) ->
         }
         for k, v in cmp.items()
     ]
-    return _md(pd.DataFrame(rows))
+    return md_table(pd.DataFrame(rows))
 
 
 def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
@@ -242,7 +237,7 @@ def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
             {"qini_cv_default": r.default_score, "qini_cv_tuned": r.best_score},
         )
     best = max(results, key=lambda k: results[k].best_score)
-    sections.append("### Réglage (entraînement uniquement)\n\n" + _md(pd.DataFrame(trow)))
+    sections.append("### Réglage (entraînement uniquement)\n\n" + md_table(pd.DataFrame(trow)))
 
     # 2b. Modèles finaux : entraînement complet -> prédiction sur le test
     preds = {}
@@ -270,7 +265,7 @@ def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
     sections.append(
         "### Qualité du classement sur le TEST\n\n"
         f"Repère sur le test : e-mail à tout le monde = {_pts(overall[1])} pts (homme), "
-        f"{_pts(overall[2])} pts (femme).\n\n" + _md(pd.DataFrame(rows))
+        f"{_pts(overall[2])} pts (femme).\n\n" + md_table(pd.DataFrame(rows))
     )
 
     # 2c. Valeur des politiques sur le test, en séparant classement et choix de l'e-mail
@@ -323,7 +318,7 @@ def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
     sections.append(
         "### A e-mail égal : l'uplift vise-t-il mieux que le ciblage classique ? (TEST)\n\n"
         "Chaque ligne compare un learner au ciblage classique qui envoie LE MÊME e-mail aux "
-        "30 % les plus susceptibles de visiter.\n\n" + _md(pd.DataFrame(fair_rows))
+        "30 % les plus susceptibles de visiter.\n\n" + md_table(pd.DataFrame(fair_rows))
     )
 
     # 2d. Calibration du meilleur learner sur le test
@@ -342,7 +337,7 @@ def bench_hillstrom(seed: int = config.SEED) -> tuple[str, str]:
                     "observé (pts)": f"{_pts(c.observe)} [{_pts(c.ci_low)} ; {_pts(c.ci_high)}]",
                 }
             )
-    sections.append(f"### Calibration du {best} sur le TEST\n\n" + _md(pd.DataFrame(cal_rows)))
+    sections.append(f"### Calibration du {best} sur le TEST\n\n" + md_table(pd.DataFrame(cal_rows)))
 
     # 2e. Dépense (dollars) : même learner et mêmes réglages, cible continue
     spend = h["spend"].to_numpy()
@@ -412,7 +407,7 @@ def bench_criteo(n: int = 400_000, seed: int = config.SEED) -> str:
     return (
         f"## 4. Criteo : visite ({_n(n)} lignes tirées de l'échantillon, 85 % traités ; réglages par défaut)\n\n"
         + f"Repère : effet moyen de la publicité = {_pts(overall)} pts. Validation croisée à 3 plis.\n\n"
-        + _md(pd.DataFrame(rows))
+        + md_table(pd.DataFrame(rows))
     )
 
 

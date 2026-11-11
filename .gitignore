@@ -45,3 +45,6 @@ htmlcov/
 Thumbs.db
 .idea/
 .vscode/
+
+# cache de session marimo (généré à l'exécution)
+__marimo__/

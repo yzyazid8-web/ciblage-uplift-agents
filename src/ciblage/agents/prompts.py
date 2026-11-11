@@ -61,6 +61,8 @@ Vocabulaire (à respecter strictement) :
   « des e-mails aux hommes » ;
 - les segments décrivent ce que le client a déjà acheté : « clients ayant acheté seulement au
   rayon homme », « seulement au rayon femme », « aux deux rayons ».
+- les dépenses passées des clients (champs « _usd ») sont en DOLLARS, la monnaie de la campagne
+  d'origine ; les budgets et les coûts des e-mails sont en euros.
 
 Règles impératives :
 - Utilise UNIQUEMENT les nombres présents dans le dossier, tels quels ou arrondis.

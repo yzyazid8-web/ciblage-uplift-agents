@@ -44,6 +44,11 @@ U = {
         intent="plan", budget=500
     ),  # le LLM n'a retenu qu'un budget : la règle des budgets multiples corrige
     "analyse libre": Understanding(intent="analyse"),
+    "Avec 1 000 €, limite à 3 000 envois, l'e-mail homme 0,12 € et l'e-mail femme 0,10 €.": (
+        Understanding(intent="plan", budget=1000, cost_homme=0.12, cost_femme=0.10)
+    ),  # vu en test réel (audit I4) : la limite était ignorée sans question
+    "l'e-mail homme": Understanding(intent="plan"),
+    "aucune": Understanding(intent="plan"),
     "flou": Understanding(
         intent="plan", budget=600, ambiguities=["Le coût de 10 € est-il pour 100 e-mails ?"]
     ),
@@ -544,3 +549,73 @@ def test_writer_failure_falls_back_to_the_safe_text(planner):
     r = copilot(planner, writer=out_of_quota).send("t46", "plan complet")
     assert r.kind == "reponse" and r.text.startswith("Plan recommandé")
     assert "rédaction : échec (RuntimeError)" in r.trace
+
+
+LIMIT_MSG = "Avec 1 000 €, limite à 3 000 envois, l'e-mail homme 0,12 € et l'e-mail femme 0,10 €."
+
+
+def test_a_limit_without_its_email_triggers_a_question_then_is_applied(planner):
+    c = copilot(planner)
+    r = c.send("t50", LIMIT_MSG)
+    assert r.kind == "question" and "3 000 envois" in r.text and "e-mail homme" in r.text
+    r = c.send("t50", "l'e-mail homme")  # le LLM n'extrait rien : la règle lit la réponse
+    assert r.kind == "reponse"
+    assert r.scenario["max_homme"] == 3000 and r.scenario["max_femme"] is None
+    assert r.result["summary"]["email_homme"] <= 3000
+
+
+def test_a_limit_can_be_explicitly_ignored(planner):
+    c = copilot(planner)
+    c.send("t51", LIMIT_MSG)
+    r = c.send("t51", "aucune")
+    assert r.kind == "reponse" and r.scenario["max_homme"] is None
+
+
+def test_export_needs_an_unambiguous_yes():
+    from ciblage.agents.graph import is_yes
+
+    assert is_yes("oui") and is_yes("Oui, vas-y !") and is_yes("je confirme")
+    for reply in ("oui mais avec 500 € plutôt", "ok non attends", "yes please no", "non", ""):
+        assert not is_yes(reply), reply
+
+
+def test_demo_limits_stop_before_any_llm_call(planner):
+    calls = []
+
+    def counting_understand(messages):
+        calls.append(1)
+        return fake_understand(messages)
+
+    deps = Deps(planner=planner, understand=counting_understand, write=faithful_writer)
+    c = Copilot(deps, max_per_session=2, max_per_day=3)
+    c.send("t52", "météo")
+    c.send("t52", "météo")
+    r = c.send("t52", "météo")  # 3e message de la session : refusé sans appel
+    assert "limite de la démo" in r.text and len(calls) == 2
+    c.send("t53", "météo")  # autre session : 3e message du jour, accepté
+    r = c.send("t54", "météo")  # 4e message du jour : refusé
+    assert "aujourd'hui" in r.text and len(calls) == 3
+    events = list(c.stream("t55", "météo"))
+    assert len(events) == 1 and "aujourd'hui" in events[0]["texte"]
+
+
+def test_quota_errors_get_a_clear_message(planner):
+    from ciblage.agents.graph import QUOTA_MESSAGE, is_quota_error
+
+    class RateLimitError(Exception):
+        pass
+
+    def no_quota(messages):
+        raise RateLimitError("Error code: 429 - Rate limit reached (tokens per day)")
+
+    assert is_quota_error(RateLimitError("429")) and not is_quota_error(ValueError("bug"))
+    deps = Deps(planner=planner, understand=no_quota, write=faithful_writer)
+    r = Copilot(deps).send("t56", "plan complet")
+    assert r.text == QUOTA_MESSAGE
+
+    def analyst_no_quota(messages):
+        raise RateLimitError("429")
+
+    c = copilot(planner, analyze=analyst_no_quota)
+    r = c.send("t57", "analyse libre")
+    assert r.text == QUOTA_MESSAGE

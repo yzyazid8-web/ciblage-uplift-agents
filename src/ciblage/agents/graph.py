@@ -26,8 +26,7 @@ REQUIRED = {
 MAX_CLARIFY = 3
 MAX_ANALYST_STEPS = 5  # décisions du LLM à outils par tour (quota : environ 1 appel par étape)
 MAX_TOOL_CALLS = 6  # appels d'outils par décision
-# budgets cités : nombres d'au moins 10 dans une question qui parle d'euros ou de budget, sauf
-# les nombres d'e-mails, d'envois, de clients ou de visites, les pourcentages et les numéros
+
 MONEY_WORDS = re.compile(r"€|\beuros?\b|\bbudgets?\b", re.IGNORECASE)
 NOT_A_BUDGET_AFTER = re.compile(
     r"\s*(e-?mails?|mails?|envois?|clients?|visites?|%|pts?|points?)", re.IGNORECASE
@@ -57,10 +56,31 @@ APP_WORDS = re.compile(
 )
 MARKDOWN = re.compile(r"\*\*|__")  # gras markdown, retiré malgré la consigne si le LLM en met
 NEXT_STEP = {"conseil": "advise", "expliquer": "explain_decision", "exporter": "confirm_export"}
-YES = re.compile(
-    r"^\s*(oui|o|ok|yes|y|vas-y|go|confirme|je confirme|d'accord|c'est bon)\b", re.IGNORECASE
-)
+
+YES_WORDS = {
+    "oui", "o", "ok", "okay", "yes", "y", "vas-y", "go", "confirme", "confirmé", "je",
+    "d'accord", "c'est", "bon", "valide", "validé", "parfait", "exporte", "merci", "allez",
+}  # fmt: skip
+
+
+def is_yes(reply: str) -> bool:
+    words = re.findall(r"[\w'’-]+", (reply or "").lower().replace("’", "'"))
+    return bool(words) and all(w in YES_WORDS for w in words)
+
+
 SCENARIO_FIELDS = {f for f in Scenario.__dataclass_fields__}
+
+QUOTA_MESSAGE = (
+    "Le quota gratuit du service de langage est atteint pour le moment. Le formulaire et les "
+    "graphiques restent utilisables ; réessaie l'agent dans quelques heures."
+)
+
+
+def is_quota_error(err: BaseException) -> bool:
+    """Limite de débit ou quota du fournisseur de LLM (et non une erreur de programmation)."""
+    text = f"{type(err).__name__} {err}".lower()
+    return "ratelimit" in text or "rate limit" in text or "429" in text
+
 
 REFUSAL = (
     "Je suis un copilote de campagnes : je calcule qui contacter, avec quel e-mail et pour quel "
@@ -278,6 +298,47 @@ def fallback(kind: str, facts: dict[str, Any]) -> str:
     return generic_template(facts)
 
 
+# limite d'envois citée sans dire à quel e-mail elle s'applique (audit I4)
+_LIMIT = re.compile(
+    r"(?:limit\w*|max(?:imum)?\b|au plus|pas plus de|plafon\w*|envoy\w*[^\d.,;]{0,15}plus de)"
+    r"\s*(?:à|de|:)?\s*"
+    r"(\d{1,3}(?:[   ]\d{3})+|\d+)",
+    re.IGNORECASE,
+)
+_ASSIGNED_AFTER = re.compile(
+    r"\s*(?:e-?mails?|envois?|mails?)?\s*(?:de l'e-?mail|d'e-?mails?|pour l'e-?mail|pour les e-?mails"
+    r"|e-?mails?)?\s*(homme|femme)\b",
+    re.IGNORECASE,
+)
+_ASSIGNED_BEFORE = re.compile(r"(homme|femme)\s*[:,]?\s*$", re.IGNORECASE)
+_MONEY_AFTER = re.compile(r"\s*(€|euros?\b)", re.IGNORECASE)
+
+
+def unassigned_limit(text: str) -> int | None:
+    """Nombre d'envois maximal cité sans préciser l'e-mail (« limite à 3 000 envois »), sinon None."""
+    for m in _LIMIT.finditer(text or ""):
+        after = text[m.end() : m.end() + 45]
+        before = text[max(0, m.start() - 30) : m.start()]
+        if _MONEY_AFTER.match(after):  # « budget max 1 000 € » : un budget, pas une limite d'envois
+            continue
+        if _ASSIGNED_AFTER.match(after) or _ASSIGNED_BEFORE.search(before):
+            continue
+        return int(re.sub(r"\D", "", m.group(1)))
+    return None
+
+
+def limit_choice(reply: str) -> str | None:
+    """Réponse à « à quel e-mail s'applique la limite ? » : homme, femme, les_deux, aucune ou None."""
+    text = (reply or "").lower()
+    if re.search(r"\baucune\b|sans limite|pas de limite|ignore", text):
+        return "aucune"
+    both = re.search(r"chacun|les deux|tous les deux|deux e-?mails", text)
+    homme, femme = "homme" in text, "femme" in text
+    if both or (homme and femme):
+        return "les_deux"
+    return "homme" if homme else "femme" if femme else None
+
+
 def plausibility_issues(draft: dict[str, Any]) -> list[str]:
     """Controle de vraisemblance deterministe (ne dépend pas du LLM)."""
     issues = []
@@ -400,7 +461,9 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         except Exception as err:  # réponse invalide du LLM, quota, réseau : on ne plante pas
             return {
                 "understanding": {"intent": "echec"},
-                "answer": "Je n'ai pas réussi à analyser ta demande (service de langage indisponible "
+                "answer": QUOTA_MESSAGE
+                if is_quota_error(err)
+                else "Je n'ai pas réussi à analyser ta demande (service de langage indisponible "
                 "ou réponse invalide). Peux-tu reformuler, ou réessayer dans un instant ?",
                 "llm_calls": state.get("llm_calls", 0) + 1,
                 "trace": state.get("trace", []) + [f"compréhension : échec ({type(err).__name__})"],
@@ -411,7 +474,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "trace": state.get("trace", []) + [f"compréhension : {u.intent}"],
         }
 
-    def supervisor(state: AgentState) -> dict[str, Any]:
+    def router(state: AgentState) -> dict[str, Any]:
         understanding = dict(state["understanding"])
         if state.get("pending_intent"):
             understanding["intent"] = state["pending_intent"]
@@ -455,6 +518,29 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         missing = [label for key, label in REQUIRED.items() if draft.get(key) is None]
         if draft.get("objective") == "profit" and draft.get("value_per_visit") is None:
             missing.append("ce que rapporte une visite (en €), pour l'objectif profit")
+        limit = unassigned_limit(state.get("turn_question", ""))
+        if (
+            limit
+            and intent in ("plan", "modifier")
+            and draft.get("max_homme") is None
+            and draft.get("max_femme") is None
+            and not draft.get("limite_resolue")
+        ):
+            choice = (
+                limit_choice(state.get("user_input", "")) if state.get("pending_intent") else None
+            )
+            if choice in ("homme", "les_deux"):
+                draft["max_homme"] = limit
+            if choice in ("femme", "les_deux"):
+                draft["max_femme"] = limit
+            if choice:
+                draft["limite_resolue"] = True
+            else:
+                issues.append(
+                    f"Tu indiques une limite de {_fr(limit, 0)} envois : s'applique-t-elle à l'e-mail "
+                    "homme, à l'e-mail femme, ou à chacun des deux ? (Une limite sur le total des "
+                    "envois n'est pas prise en charge ; réponds « aucune » pour l'ignorer.)"
+                )
         if not missing and not issues:
             issues += _scenario(draft).errors() + plausibility_issues(draft)
         problems = (
@@ -653,6 +739,17 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         try:
             reply = deps.analyze(messages)
         except Exception as err:  # quota, réseau, appel d'outil mal formé : réponse sans l'analyste
+            if not state.get("analyst_results"):  # aucun résultat à présenter
+                return {
+                    "llm_calls": calls,
+                    "analyst_steps": steps,
+                    "answer": QUOTA_MESSAGE
+                    if is_quota_error(err)
+                    else "L'analyse n'a pas pu aboutir (service de langage indisponible). "
+                    "Réessaie dans un instant, ou pose une question plus simple.",
+                    "route": "end",
+                    "trace": state["trace"] + [f"analyste : échec ({type(err).__name__})"],
+                }
             return {
                 "llm_calls": calls,
                 "analyst_steps": steps,
@@ -793,7 +890,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             "question": None,
             "request": None,
         }
-        if not YES.match(reply):
+        if not is_yes(reply):
             return {
                 **base,
                 "answer": "Export annulé : aucun fichier n'a été écrit.",
@@ -828,7 +925,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     nodes = {
         "start": start,
         "understand": understand,
-        "supervisor": supervisor,
+        "router": router,
         "assemble": assemble,
         "clarify": clarify,
         "compute": compute,
@@ -849,9 +946,9 @@ def build_graph(deps: Deps, checkpointer: Any = None):
         g.add_node(name, fn)
     g.add_edge(START, "start")
     g.add_conditional_edges("start", lambda s: s["route"], ["understand", "too_long"])
-    g.add_edge("understand", "supervisor")
+    g.add_edge("understand", "router")
     g.add_conditional_edges(
-        "supervisor",
+        "router",
         lambda s: s["route"],
         {
             "assemble": "assemble",
@@ -874,7 +971,9 @@ def build_graph(deps: Deps, checkpointer: Any = None):
     )
     g.add_edge("data", "write")
     g.add_edge("app_help", "write")
-    g.add_conditional_edges("analyst", lambda s: s["route"], ["run_tools", "write"])
+    g.add_conditional_edges(
+        "analyst", lambda s: s["route"], {"run_tools": "run_tools", "write": "write", "end": END}
+    )
     g.add_edge("run_tools", "analyst")
     g.add_conditional_edges(
         "clarify", lambda s: s["route"], {"understand": "understand", "end": END}

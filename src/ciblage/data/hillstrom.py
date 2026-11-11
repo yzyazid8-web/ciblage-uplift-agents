@@ -22,7 +22,7 @@ TREATMENT_NAMES: dict[int, str] = {0: "temoin", 1: "email_homme", 2: "email_femm
 
 OUTCOMES = ["visit", "conversion", "spend"]
 
-# Variables connues avant la campagne`.
+# Variables connues avant la campagne.
 NUMERIC_FEATURES = ["recency", "history", "mens", "womens", "newbie"]
 CATEGORIES: dict[str, list[str]] = {
     # Orthographe d'origine du fichier conservée.

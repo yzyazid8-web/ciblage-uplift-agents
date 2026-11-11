@@ -12,16 +12,9 @@ import pandas as pd
 from ciblage import config
 from ciblage.causal import ate, balance
 from ciblage.data import criteo, hillstrom
+from ciblage.reporting import md_table
 
 OUTPUT = config.REPORTS_DIR / "phase1_effets_moyens.md"
-
-
-def _md_table(df: pd.DataFrame) -> str:
-    """Tableau markdown minimal (évite une dépendance supplémentaire)."""
-    cols = list(df.columns)
-    lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
-    lines += ["| " + " | ".join(str(v) for v in row) + " |" for row in df.itertuples(index=False)]
-    return "\n".join(lines)
 
 
 def _n(v: int) -> str:
@@ -49,7 +42,7 @@ def _effects_section(effects: pd.DataFrame, names: dict[int, str], money: set[st
                 "p ajustée (Holm)": f"{e.p_holm:.1e}",
             }
         )
-    return _md_table(pd.DataFrame(rows))
+    return md_table(pd.DataFrame(rows))
 
 
 def _balance_section(rep: balance.BalanceReport, names: dict[int, str], n_rows: int) -> str:
@@ -74,7 +67,7 @@ def _balance_section(rep: balance.BalanceReport, names: dict[int, str], n_rows: 
     return (
         ratio + f"- Tests par variable{sub} : indicatifs ; le critère retenu est la SMD\n"
         f"- |SMD| maximale : {rep.max_abs_smd:.3f} (seuil {balance.SMD_THRESHOLD}) → **{verdict}**\n\n"
-        + _md_table(table)
+        + md_table(table)
     )
 
 

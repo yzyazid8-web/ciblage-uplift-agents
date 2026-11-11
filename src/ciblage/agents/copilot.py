@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import os
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -20,6 +22,17 @@ from ciblage.agents.tracing import enable_tracing
 from ciblage.serve.planner import Planner
 
 SESSIONS_DB = config.DATA_DIR / "sessions.db"
+# plafonds de la démo publique (quota gratuit partagé) ; réglables par variables d'environnement
+MAX_PER_SESSION = int(os.environ.get("CIBLAGE_MAX_MESSAGES_SESSION", "40"))
+MAX_PER_DAY = int(os.environ.get("CIBLAGE_MAX_MESSAGES_JOUR", "400"))
+LIMIT_SESSION = (
+    "Cette conversation a atteint la limite de la démo ({n} messages). Ouvre une nouvelle page "
+    "pour recommencer ; le formulaire et les graphiques restent utilisables."
+)
+LIMIT_DAY = (
+    "La démo a atteint sa limite de messages pour aujourd'hui (quota gratuit partagé). Le "
+    "formulaire et les graphiques restent utilisables ; l'agent revient demain."
+)
 
 
 @dataclass
@@ -33,7 +46,16 @@ class TurnResult:
 
 
 class Copilot:
-    def __init__(self, deps: Deps, db_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        deps: Deps,
+        db_path: Path | None = None,
+        max_per_session: int | None = None,
+        max_per_day: int | None = None,
+    ) -> None:
+        self.max_per_session, self.max_per_day = max_per_session, max_per_day
+        self._per_session: dict[str, int] = {}
+        self._day, self._today_count = dt.date.today(), 0
         if db_path is None:
             saver: Any = InMemorySaver()
         else:
@@ -52,7 +74,20 @@ class Copilot:
             write=make_writer(),
             analyze=make_analyst(tools.schemas()),
         )
-        return cls(deps, db_path)
+        return cls(deps, db_path, max_per_session=MAX_PER_SESSION, max_per_day=MAX_PER_DAY)
+
+    def _over_limit(self, thread_id: str) -> str | None:
+        """Plafonds de la démo : message à afficher si un plafond est atteint, sinon None (et compte)."""
+        if dt.date.today() != self._day:
+            self._day, self._today_count = dt.date.today(), 0
+        if self.max_per_day is not None and self._today_count >= self.max_per_day:
+            return LIMIT_DAY
+        n = self._per_session.get(thread_id, 0)
+        if self.max_per_session is not None and n >= self.max_per_session:
+            return LIMIT_SESSION.format(n=self.max_per_session)
+        self._per_session[thread_id] = n + 1
+        self._today_count += 1
+        return None
 
     @staticmethod
     def _config(thread_id: str) -> dict[str, Any]:
@@ -84,6 +119,10 @@ class Copilot:
         Événements : {"type": "etape", "texte": ...}, puis un seul
         {"type": "reponse" | "question", "texte": ..., "scenario": ..., "trace": ..., "llm_calls": ...}.
         """
+        limit = self._over_limit(thread_id)
+        if limit:  # aucun appel au LLM
+            yield {"type": "reponse", "texte": limit, "scenario": None, "trace": [], "llm_calls": 0}
+            return
         cfg = self._config(thread_id)
         seen = 0
         question = None
@@ -107,6 +146,9 @@ class Copilot:
         }
 
     def send(self, thread_id: str, text: str) -> TurnResult:
+        limit = self._over_limit(thread_id)
+        if limit:  # aucun appel au LLM
+            return TurnResult(kind="reponse", text=limit, trace=["garde-fou : limite de la démo"])
         cfg = self._config(thread_id)
         out = self.graph.invoke(self._payload(thread_id, text), cfg)
         common = {

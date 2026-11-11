@@ -249,7 +249,7 @@ def client_explanation(planner: Planner, sc: Scenario, client_id: int) -> dict[s
         "client": client_id,
         "segment": str(planner.segment.iloc[client_id]),
         "mois_depuis_dernier_achat": int(row["recency"]),
-        "depense_annee_passee_eur": round(float(row["history"]), 2),
+        "depense_annee_passee_usd": round(float(row["history"]), 2),
         "nouveau_client": bool(row["newbie"]),
         "canal": str(row["channel"]),
         "decision": LABELS[int(plan.assignment[client_id])],
@@ -289,7 +289,7 @@ def excluded_profile(planner: Planner, sc: Scenario) -> dict[str, Any]:
                 100 * float((planner.uplift[mask].max(axis=1) <= 0).mean()), 1
             ),
             "mois_depuis_dernier_achat_moyen": round(float(clients["recency"].mean()), 1),
-            "depense_annee_passee_mediane_eur": round(float(clients["history"].median()), 2),
+            "depense_annee_passee_mediane_usd": round(float(clients["history"].median()), 2),
             "part_nouveaux_clients_pct": round(100 * float(clients["newbie"].mean()), 1),
             "repartition_segments_pct": {k: round(100 * float(v), 1) for k, v in seg.items()},
         }
@@ -471,8 +471,8 @@ def portfolio_overview(planner: Planner, segment: str | None = None) -> dict[str
         "part_nouveaux_clients_pct": round(100 * float(c["newbie"].mean()), 1),
         "canal_pct": shares(c["channel"].astype(str)),
         "zone_pct": shares(c["zip_code"].astype(str)),
-        "depense_annee_passee_mediane_eur": round(float(c["history"].median()), 2),
-        "depense_annee_passee_moyenne_eur": round(float(c["history"].mean()), 2),
+        "depense_annee_passee_mediane_usd": round(float(c["history"].median()), 2),
+        "depense_annee_passee_moyenne_usd": round(float(c["history"].mean()), 2),
         "mois_depuis_dernier_achat_moyen": round(float(c["recency"].mean()), 1),
         "taux_de_visite_sans_email_pct": round(100 * float(y[t == 0].mean()), 2),
         "uplift_mesure_email_homme": _measured(planner, mask, 1),

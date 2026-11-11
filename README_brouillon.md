@@ -108,6 +108,12 @@ Rapports : `python -m ciblage.causal.report`, `python -m ciblage.uplift.select`,
   randomisation de la campagne.
 - Sur Hillstrom, l'e-mail principal a un effet presque uniforme : peu à optimiser. Le gain de la
   méthode se voit quand l'effet varie (e-mail femme, simulateur).
+- Le **choix entre les deux e-mails** n'est pas validé par les données : le modèle prédit des écarts
+  d'effet de l'e-mail homme entre clients (de +3,6 à +11,6 points selon les tranches), mais
+  l'effet mesuré reste plat (+7,0 à +8,7). Par exemple, le plan envoie l'e-mail homme à des
+  clients « seulement femme » alors que, mesuré sur ce segment, l'e-mail femme fait aussi bien
+  (+7,6 contre +6,7 points, écart non démontré) pour moins cher. Les raisons données par l'agent sont fidèles à l'optimiseur,
+  pas une preuve causale individuelle.
 - Agent : gabarits de test écrits à la main, un seul passage par cas, quota gratuit (IC larges).
 
 ## Stack

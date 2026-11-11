@@ -28,10 +28,22 @@ Après avoir cassé la randomisation, l'échantillon observationnel compte 21 18
 | IPW | +7.82 | [+6.56 ; +9.07] | +0.16 | oui |
 | AIPW | +7.79 | [+6.55 ; +9.03] | +0.13 | oui |
 
-## 5. Sensibilité au confounding caché (E-value)
+## 5. Et si le confondant n'était pas mesuré ?
 
-Même corrigé, l'effet pourrait venir d'un confondant **non mesuré**. La E-value est le risque relatif minimal qu'un tel confondant devrait avoir avec le traitement ET le résultat pour annuler l'effet.
+Démonstration directe plutôt qu'un indice théorique : on refait l'AIPW en **retirant `history` de l'ajustement** (propension et réponse), comme si ce confondant n'avait pas été observé.
 
-- Risque relatif implicite de l'AIPW : **1.85**.
-- **E-value ponctuelle : 3.10** — un confondant caché devrait être associé d'un facteur ≥ 3.10 au traitement et au résultat pour expliquer l'effet.
-- **E-value de l'IC : 2.82** (l'IC exclut 0 : un confondant plus faible que cela ne suffirait pas à rendre le résultat non significatif).
+- AIPW **avec** `history` (ajustement complet) : **+7.79 pts** [+6.55 ; +9.03], écart à la vérité +0.13 pts.
+- AIPW **sans** `history` (confondant non mesuré) : **+8.96 pts** [+7.96 ; +9.97], écart +1.31 pts.
+Retirer le confondant fait **revenir le biais** : aucune méthode ne corrige un confondant qu'elle ne voit pas. La correction ne vaut donc que si les bons déterminants sont mesurés.
+
+## 6. Robustesse selon l'intensité du confounding
+
+On fait varier l'intensité du biais injecté (0 = randomisation préservée). Le biais naïf croît avec l'intensité, tandis que l'AIPW reste proche de la vérité tant que le confondant est mesuré.
+
+| intensité | clients | naïf (pts) | écart naïf | AIPW (pts) | écart AIPW |
+|---|---|---|---|---|---|
+| 0.0 | 21 123 | +7.78 | +0.12 | +7.72 | +0.06 |
+| 0.5 | 21 154 | +8.65 | +0.99 | +7.59 | -0.06 |
+| 1.0 | 21 227 | +9.78 | +2.12 | +8.01 | +0.35 |
+| 1.5 | 21 184 | +10.44 | +2.78 | +7.79 | +0.13 |
+| 2.0 | 21 197 | +10.86 | +3.20 | +8.33 | +0.67 |

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 
 from ciblage import config
-from ciblage.causal import confounding, sensitivity
+from ciblage.causal import confounding
 from ciblage.causal.aipw import Estimate, aipw_ate, ipw_ate, naive_ate
 from ciblage.causal.propensity import overlap, propensity_cv, smd_max
 from ciblage.data import hillstrom
@@ -18,6 +19,7 @@ OUTPUT = config.REPORTS_DIR / "phase1b_observationnel.md"
 ACTION = 1  # e-mail homme (effet moyen fort sur Hillstrom : biais bien visible)
 COVARIATE = "history"  # montant déjà dépensé : corrélé à la visite -> bon confondant
 STRENGTH = 1.5
+STRENGTHS = [0.0, 0.5, 1.0, 1.5, 2.0]  # balayage de l'intensité du confounding
 OUTCOME = "visit"
 
 
@@ -48,6 +50,42 @@ def _estimator_table(truth: Estimate, estimates: list[Estimate]) -> str:
     return md_table(pd.DataFrame(rows))
 
 
+def _sample(conf: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """Extrait (X encodé, w binaire, y) d'un sous-échantillon {témoin, ACTION}."""
+    y = conf[OUTCOME].to_numpy()
+    w = (conf["treatment"] == ACTION).to_numpy().astype(int)
+    X = hillstrom.encode_features(conf)
+    return X, w, y
+
+
+def aipw_without(conf: pd.DataFrame, dropped: str) -> Estimate:
+    """AIPW en RETIRANT une covariable de l'ajustement (propension ET réponse) : confondant non mesuré."""
+    X, w, y = _sample(conf)
+    X = X.drop(columns=[dropped])
+    return aipw_ate(X, w, y, propensity_cv(X, w))
+
+
+def strength_sweep(h: pd.DataFrame, truth: float, strengths: list[float]) -> pd.DataFrame:
+    """Pour plusieurs intensités de confusion : biais naïf vs AIPW (écart à la vérité)."""
+    rows = []
+    for s in strengths:
+        conf = confounding.make_confounded(h, action=ACTION, covariate=COVARIATE, strength=s)
+        X, w, y = _sample(conf)
+        naive = naive_ate(y, w)
+        aipw = aipw_ate(X, w, y, propensity_cv(X, w))
+        rows.append(
+            {
+                "intensité": f"{s:.1f}",
+                "clients": _n(len(conf)),
+                "naïf (pts)": _pts(naive.ate),
+                "écart naïf": _pts(naive.ate - truth),
+                "AIPW (pts)": _pts(aipw.ate),
+                "écart AIPW": _pts(aipw.ate - truth),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def build() -> str:
     h = hillstrom.load()
     name = hillstrom.TREATMENT_NAMES[ACTION]
@@ -72,9 +110,8 @@ def build() -> str:
     est_naive = naive_ate(y, w)
     est_ipw = ipw_ate(y, w, e)
     est_aipw = aipw_ate(X, w, y, e)
-
-    baseline = float(y[w == 0].mean())  # taux de visite des témoins de l'échantillon biaisé
-    ev = sensitivity.e_value(est_aipw.ate, est_aipw.ci_low, est_aipw.ci_high, baseline)
+    est_unmeasured = aipw_without(conf, COVARIATE)  # AIPW sans le confondant (= non mesuré)
+    sweep = strength_sweep(h, truth.ate, STRENGTHS)
 
     biais_naif = est_naive.ate - truth.ate
     parts = [
@@ -104,20 +141,21 @@ def build() -> str:
         "« écart à la vérité » = effet estimé − vérité terrain ; plus il est proche de 0, mieux "
         "c'est. L'AIPW est doublement robuste : juste si le modèle de réponse OU la propension l'est.",
         _estimator_table(truth, [est_naive, est_ipw, est_aipw]),
-        "## 5. Sensibilité au confounding caché (E-value)",
-        "Même corrigé, l'effet pourrait venir d'un confondant **non mesuré**. La E-value est le "
-        "risque relatif minimal qu'un tel confondant devrait avoir avec le traitement ET le "
-        "résultat pour annuler l'effet.",
-        f"- Risque relatif implicite de l'AIPW : **{ev.risk_ratio:.2f}**.\n"
-        f"- **E-value ponctuelle : {ev.point:.2f}** — un confondant caché devrait être associé "
-        f"d'un facteur ≥ {ev.point:.2f} au traitement et au résultat pour expliquer l'effet.\n"
-        f"- **E-value de l'IC : {ev.ci:.2f}** "
-        + (
-            "(l'IC exclut 0 : un confondant plus faible que cela ne suffirait pas à rendre le "
-            "résultat non significatif)."
-            if ev.ci > 1.0
-            else "(l'IC contient 0 : l'effet n'est pas démontré, rien à expliquer)."
-        ),
+        "## 5. Et si le confondant n'était pas mesuré ?",
+        f"Démonstration directe plutôt qu'un indice théorique : on refait l'AIPW en **retirant "
+        f"`{COVARIATE}` de l'ajustement** (propension et réponse), comme si ce confondant n'avait "
+        "pas été observé.",
+        f"- AIPW **avec** `{COVARIATE}` (ajustement complet) : **{_pts(est_aipw.ate)} pts** "
+        f"{_ic(est_aipw)}, écart à la vérité {_pts(est_aipw.ate - truth.ate)} pts.\n"
+        f"- AIPW **sans** `{COVARIATE}` (confondant non mesuré) : **{_pts(est_unmeasured.ate)} pts** "
+        f"{_ic(est_unmeasured)}, écart {_pts(est_unmeasured.ate - truth.ate)} pts.\n"
+        "Retirer le confondant fait **revenir le biais** : aucune méthode ne corrige un confondant "
+        "qu'elle ne voit pas. La correction ne vaut donc que si les bons déterminants sont mesurés.",
+        "## 6. Robustesse selon l'intensité du confounding",
+        "On fait varier l'intensité du biais injecté (0 = randomisation préservée). Le biais naïf "
+        "croît avec l'intensité, tandis que l'AIPW reste proche de la vérité tant que le confondant "
+        "est mesuré.",
+        md_table(sweep),
     ]
     return "\n\n".join(parts) + "\n"
 

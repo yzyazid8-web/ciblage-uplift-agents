@@ -1,4 +1,4 @@
-"""Estimation causale observationnelle : propension, AIPW, E-value, fabrique de confounding."""
+"""Estimation causale observationnelle : propension, AIPW et fabrique de confounding."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import pandas as pd
 from ciblage.causal import confounding
 from ciblage.causal.aipw import aipw_ate, ipw_ate, naive_ate
 from ciblage.causal.propensity import overlap, propensity_cv, smd_max
-from ciblage.causal.sensitivity import e_value, e_value_rr, risk_ratio
 
 
 def _sim(n: int = 4000, tau: float = 0.1, seed: int = 0):
@@ -76,18 +75,24 @@ def test_make_confounded_induces_imbalance() -> None:
     assert after > 0.5  # confondu : les traités ont une covariable nettement plus élevée
 
 
-def test_e_value_rr_properties() -> None:
-    assert e_value_rr(1.0) == 1.0
-    assert abs(e_value_rr(2.0) - (2.0 + 2.0**0.5)) < 1e-9
-    assert abs(e_value_rr(0.5) - e_value_rr(2.0)) < 1e-9  # symétrie autour de 1
-    assert e_value_rr(3.0) > e_value_rr(2.0)  # monotone
+def test_aipw_biased_when_confounder_dropped() -> None:
+    # (b) retirer le confondant (x0) de l'ajustement fait revenir le biais : il n'est plus "mesuré".
+    X, w, y = _sim(tau=0.1, seed=0)
+    full = aipw_ate(X, w, y, propensity_cv(X, w))
+    X_drop = X.drop(columns=["x0"])
+    dropped = aipw_ate(X_drop, w, y, propensity_cv(X_drop, w))
+    assert abs(dropped.ate - 0.10) > abs(full.ate - 0.10)  # plus loin de la vérité
+    assert dropped.ate > full.ate  # biais vers le haut, comme le naïf
 
 
-def test_e_value_from_ate() -> None:
-    assert abs(risk_ratio(0.05, baseline=0.10) - 1.5) < 1e-9
-    # effet significatif : E-value de l'IC > 1
-    sig = e_value(ate=0.05, ci_low=0.02, ci_high=0.08, baseline=0.10)
-    assert sig.point > 1.0 and sig.ci > 1.0
-    # IC qui contient 0 : rien à expliquer
-    ns = e_value(ate=0.02, ci_low=-0.01, ci_high=0.05, baseline=0.10)
-    assert ns.ci == 1.0
+def test_confounding_strength_monotone() -> None:
+    # (a) plus l'intensité est forte, plus le déséquilibre induit est grand.
+    rng = np.random.default_rng(0)
+    n = 8000
+    df = pd.DataFrame({"treatment": rng.integers(0, 2, n), "cov": rng.normal(size=n)})
+
+    def imbalance(s: float) -> float:
+        c = confounding.make_confounded(df, action=1, covariate="cov", strength=s)
+        return c.loc[c.treatment == 1, "cov"].mean() - c.loc[c.treatment == 0, "cov"].mean()
+
+    assert imbalance(0.0) < imbalance(1.0) < imbalance(2.0)

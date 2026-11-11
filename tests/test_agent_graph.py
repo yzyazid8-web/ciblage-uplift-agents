@@ -619,3 +619,30 @@ def test_quota_errors_get_a_clear_message(planner):
     c = copilot(planner, analyze=analyst_no_quota)
     r = c.send("t57", "analyse libre")
     assert r.text == QUOTA_MESSAGE
+
+
+def test_answers_carry_a_source_line(planner):
+    """#2 provenance : une réponse chiffrée indique de quel calcul elle provient."""
+    r = copilot(planner).send("t58", "plan complet")
+    assert r.kind == "reponse"
+    assert "\nSource :" in r.text  # ligne ajoutée par le code, pas par le LLM
+
+
+def test_application_answers_have_no_source_line(planner):
+    r = copilot(planner).send("t59", "Que fait ce marimo ?")
+    assert r.kind == "reponse" and "Source :" not in r.text
+
+
+def test_provenance_lists_the_analyst_tools():
+    from ciblage.agents.graph import provenance
+
+    facts = {
+        "resultats_des_outils": [
+            {"outil": "calculer_plans"},
+            {"outil": "calculer_plans"},
+            {"outil": "comparer_politiques"},
+        ]
+    }
+    assert provenance("analyse", facts) == "Sources : outils — calculer plans, comparer politiques."
+    assert provenance("comparaison", {}).startswith("Source :")
+    assert provenance("application", {}) == ""

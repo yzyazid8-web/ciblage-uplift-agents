@@ -298,6 +298,40 @@ def fallback(kind: str, facts: dict[str, Any]) -> str:
     return generic_template(facts)
 
 
+# provenance : le code sait quels calculs ont produit les chiffres (pas le LLM, qui l'inventerait)
+SOURCES = {
+    "plan": "plan optimisé sous budget, vérifié sur le jeu de test (IC 95 %)",
+    "conseil_budget_delta": "analyse de sensibilité au budget (prix marginal, saturation)",
+    "conseil_budget_courbe": "courbe budget → visites du plan",
+    "conseil_cout": "seuil de rentabilité de l'e-mail",
+    "comparaison": "comparaison des scénarios déjà calculés",
+    "explication_client": "décision du plan pour ce client (uplift prédit, seuil de rentabilité)",
+    "explication_segment": "répartition du plan par segment",
+    "explication_segments": "répartition du plan par segment",
+    "explication_ecartes": "profil des clients écartés par le plan",
+    "explication_indicateurs": "indicateurs du plan affiché",
+    "explication_politiques": "taux de visite mesurés des politiques (IC 95 %)",
+    "explication_resultats": "résultats du plan affiché",
+    "donnees": "portrait du portefeuille (données de la campagne)",
+}
+
+
+def provenance(kind: str, facts: dict[str, Any]) -> str:
+    """Ligne « Source » déterministe, annexée à la réponse pour rendre les chiffres auditables."""
+    if kind == "analyse":
+        outils = facts.get("resultats_des_outils") or []
+        noms = list(dict.fromkeys(r.get("outil", "") for r in outils if r.get("outil")))
+        propre = ", ".join(n.replace("_", " ") for n in noms)
+        return f"Sources : outils — {propre}." if propre else ""
+    label = SOURCES.get(kind)
+    return f"Source : {label}." if label else ""
+
+
+def _with_source(text: str, kind: str, facts: dict[str, Any]) -> str:
+    src = provenance(kind, facts)
+    return f"{text}\n\n{src}" if src else text
+
+
 # limite d'envois citée sans dire à quel e-mail elle s'applique (audit I4)
 _LIMIT = re.compile(
     r"(?:limit\w*|max(?:imum)?\b|au plus|pas plus de|plafon\w*|envoy\w*[^\d.,;]{0,15}plus de)"
@@ -691,7 +725,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             if report.ok:
                 trace.append(f"rédaction : chiffres vérifiés (essai {attempt + 1})")
                 return {
-                    "answer": MARKDOWN.sub("", text),
+                    "answer": _with_source(MARKDOWN.sub("", text), kind, facts),
                     "llm_calls": calls,
                     "trace": trace,
                     "draft_answer": None,
@@ -708,7 +742,7 @@ def build_graph(deps: Deps, checkpointer: Any = None):
             msgs = msgs + [("assistant", text), ("user", "\n\n".join(fixes))]
         trace.append("rédaction : texte standard (repli sûr)")
         return {
-            "answer": fallback(kind, facts),
+            "answer": _with_source(fallback(kind, facts), kind, facts),
             "llm_calls": calls,
             "trace": trace,
             "draft_answer": None,

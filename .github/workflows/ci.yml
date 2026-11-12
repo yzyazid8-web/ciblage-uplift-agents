@@ -16,7 +16,9 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12.2"
+          # dernier patch 3.12.x disponible sur le runner (le patch exact 3.12.2 a disparu du cache
+          # quand l'image runner est passée à Ubuntu 26.04) ; l'image Docker, elle, reste sur 3.12.2
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
